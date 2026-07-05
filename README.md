@@ -88,11 +88,10 @@ Larasend can use stored AWS credentials or, in production, an attached EC2 insta
 The IAM principal used by Larasend needs SES permissions for:
 
 ```text
-ses:SendRawEmail
+ses:SendEmail
 ses:CreateEmailIdentity
 ses:GetEmailIdentity
 ses:GetAccount
-ses:GetSendQuota
 ```
 
 Recommended setup:

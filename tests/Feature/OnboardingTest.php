@@ -20,7 +20,7 @@ it('renders first-run onboarding with docker and ses setup guidance', function (
             ->where('project.next_step.key', 'source')
             ->has('source.webhook_url')
             ->has('install.compose')
-            ->where('install.compose', 'docker compose up --build -d')
+            ->where('install.compose', 'docker compose up -d')
             ->has('progress', 5)
         );
 });

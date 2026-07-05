@@ -86,9 +86,9 @@ class OnboardingController extends Controller
             ] : null,
             'progress' => $progress,
             'install' => [
-                'compose' => 'docker compose up --build -d',
+                'compose' => 'docker compose up -d',
                 'migrate' => 'docker compose exec app php artisan migrate --force',
-                'worker' => 'docker compose exec app php artisan queue:work --queue=default,mail,webhooks',
+                'worker' => 'docker compose exec app php artisan queue:work --queue=default,webhooks',
             ],
         ]);
     }
@@ -97,7 +97,7 @@ class OnboardingController extends Controller
     {
         $workspace = $context->workspaceFor($request->user());
         $project = $context->projectFor($request->user());
-        $source = $project->sources()->firstOrFail();
+        $source = $context->currentSource($project);
         $validated = $request->validated();
         $projectSlug = $validated['project_slug'] ?: Str::slug($validated['project_name']);
 

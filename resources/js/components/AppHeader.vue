@@ -64,12 +64,12 @@ const mainNavItems: NavItem[] = [
 const rightNavItems: NavItem[] = [
     {
         title: 'Repository',
-        href: 'https://github.com/vijaythecoder/larasend',
+        href: 'https://github.com/savvyagents/larasend',
         icon: Folder,
     },
     {
         title: 'Documentation',
-        href: 'https://github.com/vijaythecoder/larasend#readme',
+        href: 'https://github.com/savvyagents/larasend#readme',
         icon: BookOpen,
     },
 ];

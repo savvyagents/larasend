@@ -30,11 +30,16 @@ FROM php:8.4-fpm-alpine
 WORKDIR /var/www/html
 
 RUN apk add --no-cache bash icu-dev libpq-dev nginx oniguruma-dev \
-    && docker-php-ext-install intl opcache pcntl pdo_pgsql
+    && docker-php-ext-install intl opcache pcntl pdo_pgsql \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
 
 COPY --from=vendor /app ./
 COPY --from=assets /app/public/build ./public/build
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
+COPY docker/php.ini /usr/local/etc/php/conf.d/zz-larasend.ini
 COPY docker/entrypoint.sh /usr/local/bin/larasend-entrypoint
 COPY docker/server.sh /usr/local/bin/larasend-server
 RUN chmod +x /usr/local/bin/larasend-entrypoint \

@@ -32,7 +32,9 @@ class SendQueuedEmail implements ShouldQueue
     {
         $email = Email::query()->with('source')->findOrFail($this->emailId);
 
-        if ($email->status !== 'queued') {
+        // 'sending' is allowed through so a retry can recover an email whose
+        // previous attempt died mid-flight (worker crash, timeout).
+        if (! in_array($email->status, ['queued', 'sending'], true)) {
             return;
         }
 
@@ -50,7 +52,8 @@ class SendQueuedEmail implements ShouldQueue
 
             $result = $sesClient->sendRawEmail($email->source, $mime);
         } catch (Throwable $exception) {
-            $email->forceFill(['status' => 'failed'])->save();
+            // Stay in 'sending' so the queue's remaining attempts get past the
+            // status guard above; failed() marks it failed after the last one.
             EmailActivityUpdated::dispatch($email->fresh());
 
             throw $exception;
@@ -82,6 +85,14 @@ class SendQueuedEmail implements ShouldQueue
         }
 
         $email->forceFill(['status' => 'failed'])->save();
+
+        $email->events()->create([
+            'source_id' => $email->source_id,
+            'event_type' => 'failed',
+            'payload' => ['error' => $exception->getMessage()],
+            'occurred_at' => now(),
+        ]);
+
         EmailActivityUpdated::dispatch($email->fresh());
     }
 }

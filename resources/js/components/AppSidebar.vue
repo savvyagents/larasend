@@ -28,12 +28,12 @@ const mainNavItems: NavItem[] = [
 const footerNavItems: NavItem[] = [
     {
         title: 'Repository',
-        href: 'https://github.com/vijaythecoder/larasend',
+        href: 'https://github.com/savvyagents/larasend',
         icon: FolderGit2,
     },
     {
         title: 'Documentation',
-        href: 'https://github.com/vijaythecoder/larasend#readme',
+        href: 'https://github.com/savvyagents/larasend#readme',
         icon: BookOpen,
     },
 ];
