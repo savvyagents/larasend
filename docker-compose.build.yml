@@ -1,0 +1,6 @@
+services:
+  app:
+    build: .
+
+  queue:
+    build: .

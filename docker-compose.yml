@@ -1,0 +1,46 @@
+services:
+  app:
+    image: ${LARASEND_IMAGE:-ghcr.io/savvyagents/larasend:latest}
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "${LARASEND_HTTP_PORT:-8080}:8080"
+    volumes:
+      - larasend-storage:/var/www/html/storage
+
+  queue:
+    image: ${LARASEND_IMAGE:-ghcr.io/savvyagents/larasend:latest}
+    command: php artisan queue:work --tries=3 --timeout=90
+    env_file: .env
+    environment:
+      LARASEND_RUN_MIGRATIONS: "false"
+    depends_on:
+      - app
+      - redis
+    volumes:
+      - larasend-storage:/var/www/html/storage
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-larasend}
+      POSTGRES_USER: ${DB_USERNAME:-larasend}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-larasend} -d ${DB_DATABASE:-larasend}"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - larasend-postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  larasend-postgres:
+  larasend-storage:

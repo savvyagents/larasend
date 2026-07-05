@@ -1,0 +1,33 @@
+{
+    "name": "larasend/laravel",
+    "description": "Laravel mail transport and API client for Larasend.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "email",
+        "laravel",
+        "larasend",
+        "mailer",
+        "transport"
+    ],
+    "autoload": {
+        "psr-4": {
+            "Larasend\\Laravel\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Larasend\\Laravel\\LarasendServiceProvider"
+            ],
+            "aliases": {
+                "Larasend": "Larasend\\Laravel\\Facades\\Larasend"
+            }
+        }
+    },
+    "require": {
+        "php": "^8.3",
+        "illuminate/support": "^12.0|^13.0",
+        "illuminate/mail": "^12.0|^13.0"
+    }
+}
