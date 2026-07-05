@@ -24,7 +24,7 @@ class DatabaseSeeder extends Seeder
 
         if (! $user) {
             $user = User::query()->create([
-                'name' => 'Vijay Tupakula',
+                'name' => 'Demo User',
                 'email' => 'test@example.com',
                 'email_verified_at' => now(),
                 'password' => Hash::make('password'),
@@ -78,7 +78,7 @@ class DatabaseSeeder extends Seeder
             $this->resetDemoData($demoProject);
 
             $domains = $this->seedDomains($demoProject);
-            $source = $this->seedSource($demoProject, $domains['mails.savvyagents.ai']->id);
+            $source = $this->seedSource($demoProject, $domains['mail.northwind.io']->id);
             $templates = $this->seedTemplates($demoProject);
             $this->seedApiKeys($demoProject, $source);
             $this->seedWebhooks($demoProject);
@@ -100,37 +100,37 @@ class DatabaseSeeder extends Seeder
         $records = [
             [
                 'type' => 'CNAME',
-                'name' => 'iee43wogfoxhswwn._domainkey.mails.savvyagents.ai',
-                'value' => 'iee43wogfoxhswwn.dkim.amazonses.com',
+                'name' => 'k3vqfwd7xmzpl2rt._domainkey.mail.northwind.io',
+                'value' => 'k3vqfwd7xmzpl2rt.dkim.amazonses.com',
                 'status' => 'ok',
             ],
             [
                 'type' => 'CNAME',
-                'name' => 'j1hbuapuqiya6yy9._domainkey.mails.savvyagents.ai',
-                'value' => 'j1hbuapuqiya6yy9.dkim.amazonses.com',
+                'name' => 'b8yhn4sjc6wqe9du._domainkey.mail.northwind.io',
+                'value' => 'b8yhn4sjc6wqe9du.dkim.amazonses.com',
                 'status' => 'ok',
             ],
             [
                 'type' => 'CNAME',
-                'name' => '4ujvmzpurrlsoqet._domainkey.mails.savvyagents.ai',
-                'value' => '4ujvmzpurrlsoqet.dkim.amazonses.com',
+                'name' => 'p5tgm2lxr8kfa7vn._domainkey.mail.northwind.io',
+                'value' => 'p5tgm2lxr8kfa7vn.dkim.amazonses.com',
                 'status' => 'ok',
             ],
             [
                 'type' => 'TXT',
-                'name' => 'mails.savvyagents.ai',
+                'name' => 'mail.northwind.io',
                 'value' => 'v=spf1 include:amazonses.com ~all',
                 'status' => 'ok',
             ],
             [
                 'type' => 'TXT',
-                'name' => '_dmarc.mails.savvyagents.ai',
-                'value' => 'v=DMARC1; p=quarantine; rua=mailto:dmarc@savvyagents.ai',
+                'name' => '_dmarc.mail.northwind.io',
+                'value' => 'v=DMARC1; p=quarantine; rua=mailto:dmarc@northwind.io',
                 'status' => 'ok',
             ],
             [
                 'type' => 'MX',
-                'name' => 'bounces.mails.savvyagents.ai',
+                'name' => 'bounces.mail.northwind.io',
                 'value' => '10 feedback-smtp.us-east-1.amazonses.com',
                 'status' => 'ok',
             ],
@@ -139,7 +139,7 @@ class DatabaseSeeder extends Seeder
         $domains = [];
 
         foreach ([
-            ['mails.savvyagents.ai', 'verified', $records],
+            ['mail.northwind.io', 'verified', $records],
             ['larasend.app', 'verified', $this->recordsFor('larasend.app', 'ok')],
             ['mail.harborlight.app', 'pending', $this->recordsFor('mail.harborlight.app', 'pending')],
         ] as [$domain, $status, $dnsRecords]) {
@@ -201,11 +201,11 @@ class DatabaseSeeder extends Seeder
             ['environment' => 'prod'],
             [
                 'domain_id' => $domainId,
-                'name' => 'Savvy Agents Transactional',
+                'name' => 'Northwind Transactional',
                 'ses_region' => 'us-east-1',
                 'ses_configuration_set' => 'larasend-prod',
-                'default_from_name' => 'Savvy Agents',
-                'default_from_email' => 'notifications@mails.savvyagents.ai',
+                'default_from_name' => 'Northwind',
+                'default_from_email' => 'notifications@mail.northwind.io',
                 'webhook_token' => (string) Str::uuid(),
                 'retention_days' => 90,
                 'monthly_quota' => 500000,
@@ -355,8 +355,8 @@ class DatabaseSeeder extends Seeder
                 'environment' => 'prod',
                 'status' => $status,
                 'ses_message_id' => 'msg_'.Str::upper(Str::random(12)),
-                'from_email' => 'notifications@mails.savvyagents.ai',
-                'from_name' => 'Savvy Agents',
+                'from_email' => 'notifications@mail.northwind.io',
+                'from_name' => 'Northwind',
                 'subject' => $subject,
                 'html' => $templateSlug === 'tx.receipt.v3' ? $this->receiptHtml($person[0], 'INV-'.(4800 + $index)) : $template->html,
                 'text' => $template->text,
