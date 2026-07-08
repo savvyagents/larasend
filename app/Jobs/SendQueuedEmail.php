@@ -30,7 +30,7 @@ class SendQueuedEmail implements ShouldQueue
 
     public function handle(SesV2Client $sesClient): void
     {
-        $email = Email::query()->with('source')->findOrFail($this->emailId);
+        $email = Email::query()->with(['source', 'recipients'])->findOrFail($this->emailId);
 
         // 'sending' is allowed through so a retry can recover an email whose
         // previous attempt died mid-flight (worker crash, timeout).
@@ -50,7 +50,7 @@ class SendQueuedEmail implements ShouldQueue
                 throw new \RuntimeException("Stored MIME content is missing for {$email->public_id}.");
             }
 
-            $result = $sesClient->sendRawEmail($email->source, $mime);
+            $result = $sesClient->sendRawEmail($email->source, $mime, $this->destination($email));
         } catch (Throwable $exception) {
             // Stay in 'sending' so the queue's remaining attempts get past the
             // status guard above; failed() marks it failed after the last one.
@@ -74,6 +74,20 @@ class SendQueuedEmail implements ShouldQueue
         ]);
 
         EmailActivityUpdated::dispatch($email->fresh());
+    }
+
+    /**
+     * @return array{ToAddresses?: array<int, string>, CcAddresses?: array<int, string>, BccAddresses?: array<int, string>}
+     */
+    private function destination(Email $email): array
+    {
+        $grouped = $email->recipients->groupBy('type');
+
+        return array_filter([
+            'ToAddresses' => $grouped->get('to', collect())->pluck('email')->all(),
+            'CcAddresses' => $grouped->get('cc', collect())->pluck('email')->all(),
+            'BccAddresses' => $grouped->get('bcc', collect())->pluck('email')->all(),
+        ]);
     }
 
     public function failed(Throwable $exception): void
