@@ -9,6 +9,8 @@ use App\Models\Suppression;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\SesV2Client;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 
 function larasendProjectFixture(): array
@@ -166,7 +168,7 @@ it('sends queued email jobs through ses and records the response', function () {
 
     (new SendQueuedEmail($email->id))->handle(new class extends SesV2Client
     {
-        public function sendRawEmail(Source $source, string $mime): array
+        public function sendRawEmail(Source $source, string $mime, array $destination = []): array
         {
             expect($mime)->toContain('Welcome to Larasend');
 
@@ -181,6 +183,48 @@ it('sends queued email jobs through ses and records the response', function () {
         ->status->toBe('sent')
         ->ses_message_id->toBe('ses-message-1')
         ->and($email->events()->where('event_type', 'send')->exists())->toBeTrue();
+});
+
+it('sends bcc recipients through an explicit ses destination', function () {
+    [$workspace, $project, $source, $token] = larasendProjectFixture();
+
+    Queue::fake();
+    Http::fake([
+        'https://email.*.amazonaws.com/v2/email/outbound-emails' => Http::response(['MessageId' => 'ses-message-2']),
+    ]);
+
+    $this->withToken($token)->postJson('/api/emails', [
+        'from' => 'Larasend <receipts@example.com>',
+        'to' => ['Maya <maya@example.com>'],
+        'cc' => ['Ana <ana@example.com>'],
+        'bcc' => ['Bea <bea@example.com>'],
+        'subject' => 'Monthly invoice',
+        'html' => '<h1>Hello Maya</h1>',
+        'text' => 'Hello Maya',
+    ])->assertAccepted();
+
+    $email = Email::query()->firstOrFail();
+
+    expect($email->recipients()->where('type', 'bcc')->pluck('email')->all())->toBe(['bea@example.com']);
+
+    (new SendQueuedEmail($email->id))->handle(app(SesV2Client::class));
+
+    Http::assertSent(function (Request $request): bool {
+        if (! str_contains($request->url(), '/v2/email/outbound-emails')) {
+            return false;
+        }
+
+        $destination = $request->data()['Destination'] ?? [];
+
+        return ($destination['ToAddresses'] ?? []) === ['maya@example.com']
+            && ($destination['CcAddresses'] ?? []) === ['ana@example.com']
+            && ($destination['BccAddresses'] ?? []) === ['bea@example.com'];
+    });
+
+    expect($email->fresh()->status)->toBe('sent')
+        ->and($email->fresh()->ses_message_id)->toBe('ses-message-2')
+        ->and($workspace)->toBeInstanceOf(Workspace::class)
+        ->and($project)->toBeInstanceOf(Project::class);
 });
 
 it('blocks sends to suppressed recipients', function () {
