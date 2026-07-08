@@ -2,7 +2,7 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "larasend/larasend",
     "type": "project",
-    "description": "Self-hosted transactional email platform for Laravel, backed by Amazon SES.",
+    "description": "Self-hosted transactional email platform for Laravel, backed by Amazon SES or Cloudflare Email Service.",
     "keywords": [
         "email",
         "laravel",

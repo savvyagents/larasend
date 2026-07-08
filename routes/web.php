@@ -28,6 +28,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', [OnboardingController::class, 'entry'])->name('dashboard');
     Route::get('onboarding', [OnboardingController::class, 'show'])->name('onboarding');
     Route::post('onboarding', [OnboardingController::class, 'store'])->name('onboarding.store');
+    Route::post('onboarding/validate', [OnboardingController::class, 'validateCredentials'])->name('onboarding.validate');
     Route::get('projects', ActivityController::class)->defaults('section', 'projects')->name('projects.index');
     Route::post('projects', [ProjectController::class, 'store'])->name('projects.store');
     Route::put('projects/{project}', [ProjectController::class, 'update'])->name('projects.update');
@@ -45,7 +46,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('source/quota', [DashboardActionController::class, 'syncSourceQuota'])->name('source.quota.sync');
         Route::post('domains', [DashboardActionController::class, 'storeDomain'])->name('domains.store');
         Route::post('domains/{domain}/check-dns', [DashboardActionController::class, 'checkProjectDomain'])->name('domains.check-dns');
-        Route::delete('domains/{domain}', [DashboardActionController::class, 'destroyDomain'])->name('domains.destroy');
+        Route::delete('domains/{domain}', [DashboardActionController::class, 'destroyProjectDomain'])->name('domains.destroy');
         Route::post('templates', [DashboardActionController::class, 'storeTemplate'])->name('templates.store');
         Route::post('api-keys', [DashboardActionController::class, 'storeApiKey'])->name('api-keys.store');
         Route::post('api-keys/{apiKey}/rotate', [DashboardActionController::class, 'rotateApiKey'])->name('api-keys.rotate');

@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\SourceProvider;
 use App\Http\Requests\DashboardSendEmailRequest;
 use App\Http\Requests\StoreApiKeyRequest;
 use App\Http\Requests\StoreDomainRequest;
 use App\Http\Requests\StoreTemplateRequest;
 use App\Http\Requests\StoreWebhookEndpointRequest;
 use App\Http\Requests\UpdateSourceRequest;
+use App\Jobs\RecheckPendingDomains;
 use App\Models\ApiKey;
 use App\Models\Domain;
 use App\Models\Email;
@@ -17,11 +19,11 @@ use App\Models\User;
 use App\Models\WebhookEndpoint;
 use App\Services\DnsRecordVerifier;
 use App\Services\EmailSendService;
-use App\Services\SesV2Client;
+use App\Services\Providers\DomainOnboardingException;
+use App\Services\Providers\EmailProviderFactory;
 use App\Support\ProjectContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -30,25 +32,30 @@ use Throwable;
 
 class DashboardActionController extends Controller
 {
-    public function __construct(private ProjectContext $projectContext) {}
+    public function __construct(
+        private ProjectContext $projectContext,
+        private EmailProviderFactory $providers,
+    ) {}
 
-    public function storeDomain(StoreDomainRequest $request, SesV2Client $sesClient): RedirectResponse
+    public function storeDomain(StoreDomainRequest $request): RedirectResponse
     {
         $project = $this->projectFor(Auth::user());
         $this->authorizeWorkspaceCapability($project, 'manage_domains');
 
         $source = $this->sourceFor($project);
         $domainName = Str::lower(trim($request->string('domain')->toString()));
+        $onboardingWarning = null;
 
         try {
-            $identity = $sesClient->createEmailIdentity($source, $domainName);
+            $records = $this->providers->forSource($source)->dnsRecordsForDomain($source, $domainName);
+        } catch (DomainOnboardingException $exception) {
+            $records = $exception->fallbackRecords;
+            $onboardingWarning = $exception->getMessage();
         } catch (RuntimeException $exception) {
             Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
 
             return back()->withErrors(['domain' => $exception->getMessage()])->withInput();
         }
-
-        $records = $this->dnsRecordsFor($domainName, $identity['tokens']);
 
         $domain = $project->domains()->updateOrCreate(
             ['domain' => $domainName],
@@ -61,7 +68,17 @@ class DashboardActionController extends Controller
 
         $source->forceFill(['domain_id' => $domain->id])->save();
 
-        Inertia::flash('toast', ['type' => 'success', 'message' => 'Domain added. Add the DKIM records before sending production traffic.']);
+        RecheckPendingDomains::dispatch()->delay(now()->addMinute());
+
+        if ($onboardingWarning !== null) {
+            Inertia::flash('toast', ['type' => 'error', 'message' => $onboardingWarning]);
+        } else {
+            $message = $this->providers->forSource($source)->supportsIdentityCreation()
+                ? 'Domain added. Add the DKIM records before sending production traffic.'
+                : 'Domain added and onboarded for Email Sending in Cloudflare. DNS verifies automatically within a few minutes.';
+
+            Inertia::flash('toast', ['type' => 'success', 'message' => $message]);
+        }
 
         return $this->toProjectSection($project, 'identities');
     }
@@ -86,24 +103,83 @@ class DashboardActionController extends Controller
             unset($validated['aws_session_token']);
         }
 
-        $source->update($validated);
+        if (blank($validated['cloudflare_api_token'] ?? null)) {
+            unset($validated['cloudflare_api_token']);
+        }
+
+        if (($validated['provider'] ?? null) === 'cloudflare'
+            && blank($source->cloudflare_api_token)
+            && ! isset($validated['cloudflare_api_token'])) {
+            return back()->withErrors([
+                'cloudflare_api_token' => 'A Cloudflare API token is required.',
+            ])->withInput();
+        }
+
+        $source->fill($validated);
+
+        $credentialsChanged = $source->isDirty([
+            'provider',
+            'ses_region',
+            'aws_access_key_id',
+            'aws_secret_access_key',
+            'aws_session_token',
+            'cloudflare_api_token',
+            'cloudflare_account_id',
+        ]);
+
+        $warnings = [];
+
+        if ($credentialsChanged) {
+            $provider = $this->providers->forSource($source);
+            $result = $provider->validateCredentials($source);
+
+            if (! $result['ok']) {
+                $field = $source->provider === SourceProvider::Cloudflare
+                    ? 'cloudflare_api_token'
+                    : 'aws_access_key_id';
+                $message = collect($result['blockers'])->pluck('message')->implode(' ');
+
+                Inertia::flash('toast', ['type' => 'error', 'message' => $message]);
+
+                return back()->withErrors([$field => $message])->withInput();
+            }
+
+            if (blank($source->cloudflare_account_id) && filled($result['meta']['account_id'] ?? null)) {
+                $source->cloudflare_account_id = $result['meta']['account_id'];
+            }
+
+            if (filled($result['meta']['quota'] ?? null)) {
+                $source->last_quota = $result['meta']['quota'];
+                $source->last_quota_checked_at = now();
+            }
+
+            $warnings = collect($result['warnings'])->pluck('message')->all();
+        }
+
+        $source->save();
         $project->forceFill(['default_environment' => $source->environment])->save();
 
-        Inertia::flash('toast', ['type' => 'success', 'message' => 'SES source updated.']);
+        Inertia::flash('toast', [
+            'type' => 'success',
+            'message' => $warnings === []
+                ? 'Source updated and credentials verified.'
+                : 'Source updated. '.implode(' ', $warnings),
+        ]);
 
         return $this->toProjectSection($project, 'identities');
     }
 
-    public function syncSourceQuota(Request $request, SesV2Client $sesClient): RedirectResponse
+    public function syncSourceQuota(Request $request): RedirectResponse
     {
         $project = $this->projectFor(Auth::user());
         $this->authorizeWorkspaceCapability($project, 'manage_domains');
 
         $source = $this->sourceFor($project);
+        $provider = $this->providers->forSource($source);
         $silent = $request->boolean('silent');
 
         try {
-            $account = $sesClient->getAccount($source);
+            $quota = $provider->fetchQuota($source);
         } catch (RuntimeException $exception) {
             if (! $silent) {
                 Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
@@ -114,19 +190,19 @@ class DashboardActionController extends Controller
             report($exception);
 
             if (! $silent) {
-                Inertia::flash('toast', ['type' => 'error', 'message' => 'Could not sync SES quota: '.$exception->getMessage()]);
+                Inertia::flash('toast', ['type' => 'error', 'message' => "Could not sync {$provider->key()->label()} quota: ".$exception->getMessage()]);
             }
 
             return $this->toProjectSection($project, 'setup');
         }
 
         $source->forceFill([
-            'last_quota' => $account['SendQuota'] ?? $account,
+            'last_quota' => $quota,
             'last_quota_checked_at' => now(),
         ])->save();
 
         if (! $silent) {
-            Inertia::flash('toast', ['type' => 'success', 'message' => 'SES quota synced.']);
+            Inertia::flash('toast', ['type' => 'success', 'message' => "{$provider->key()->label()} quota synced."]);
         }
 
         return $this->toProjectSection($project, 'setup');
@@ -362,23 +438,7 @@ class DashboardActionController extends Controller
 
         abort_unless($domain->project_id === $project->id, 404);
 
-        $records = collect($domain->dns_records ?? [])
-            ->map(function (array $record) use ($dnsVerifier) {
-                return [
-                    ...$record,
-                    'status' => $dnsVerifier->matches($record) ? 'ok' : 'pending',
-                ];
-            })
-            ->values()
-            ->all();
-
-        $allRecordsPass = collect($records)->every(fn (array $record) => ($record['status'] ?? null) === 'ok');
-
-        $domain->forceFill([
-            'status' => $allRecordsPass ? 'verified' : 'pending',
-            'dns_records' => $records,
-            'verified_at' => $allRecordsPass ? now() : null,
-        ])->save();
+        $dnsVerifier->recheck($domain);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => 'DNS records re-checked.']);
 
@@ -386,6 +446,16 @@ class DashboardActionController extends Controller
     }
 
     public function destroyDomain(Domain $domain): RedirectResponse
+    {
+        return $this->deleteDomain($domain);
+    }
+
+    public function destroyProjectDomain(string $projectSlug, Domain $domain): RedirectResponse
+    {
+        return $this->deleteDomain($domain);
+    }
+
+    private function deleteDomain(Domain $domain): RedirectResponse
     {
         $project = $this->projectFor(Auth::user());
         $this->authorizeWorkspaceCapability($project, 'manage_domains');
@@ -436,21 +506,18 @@ class DashboardActionController extends Controller
         return $project->domains()->whereIn('status', ['verified', 'local'])->exists()
             && $source->last_quota_checked_at?->greaterThan(now()->subHours(6)) === true
             && filled($source->last_quota)
-            && (
-                filled($source->aws_access_key_id)
-                || app()->environment('production')
-            );
+            && $this->providers->forSource($source)->hasSendingCredentials($source);
     }
 
     private function redirectToSendSetup(Project $project): RedirectResponse
     {
-        Inertia::flash('toast', [
-            'type' => 'error',
-            'message' => 'Connect SES credentials and verify a sending domain before sending real email.',
-        ]);
+        $label = $this->providers->forSource($this->sourceFor($project))->key()->label();
+        $message = "Connect {$label} credentials and verify a sending domain before sending real email.";
+
+        Inertia::flash('toast', ['type' => 'error', 'message' => $message]);
 
         return $this->toProjectSection($project, 'identities')
-            ->withErrors(['send' => 'Connect SES credentials and verify a sending domain before sending real email.']);
+            ->withErrors(['send' => $message]);
     }
 
     private function authorizeWorkspaceCapability(Project $project, string $capability): void
@@ -503,28 +570,5 @@ class DashboardActionController extends Controller
         $type = strtolower((string) ($bounce['bounceType'] ?? $tags['bounce_type'] ?? ''));
 
         return in_array($type, ['transient', 'soft'], true);
-    }
-
-    /**
-     * @param  array<int, string>  $tokens
-     * @return array<int, array<string, string>>
-     */
-    private function dnsRecordsFor(string $domain, array $tokens): array
-    {
-        return collect($tokens)
-            ->map(fn (string $token) => [
-                'type' => 'CNAME',
-                'name' => "{$token}._domainkey.{$domain}",
-                'value' => "{$token}.dkim.amazonses.com",
-                'status' => 'pending',
-            ])
-            ->whenEmpty(fn ($records) => $records->push([
-                'type' => 'TXT',
-                'name' => "_amazonses.{$domain}",
-                'value' => Arr::random(['created-by-larasend-local-mode']),
-                'status' => 'ok',
-            ]))
-            ->values()
-            ->all();
     }
 }

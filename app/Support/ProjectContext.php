@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Enums\SourceProvider;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\User;
@@ -132,6 +133,7 @@ class ProjectContext
             return $project->sources()->create([
                 'name' => 'Production',
                 'environment' => $project->default_environment,
+                'provider' => SourceProvider::Ses,
                 'ses_region' => 'us-east-1',
                 'default_from_name' => 'Larasend',
                 'default_from_email' => null,

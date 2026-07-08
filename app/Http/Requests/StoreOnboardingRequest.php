@@ -20,14 +20,16 @@ class StoreOnboardingRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'workspace_name' => ['required', 'string', 'max:80'],
-            'project_name' => ['required', 'string', 'max:80'],
+            'workspace_name' => ['nullable', 'string', 'max:80'],
+            'project_name' => ['nullable', 'string', 'max:80'],
             'project_slug' => ['nullable', 'string', 'max:80', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/'],
-            'credential_mode' => ['required', Rule::in(['instance_role', 'aws_keys', 'configure_later'])],
+            'credential_mode' => ['required', Rule::in(['instance_role', 'aws_keys', 'cloudflare_token', 'configure_later'])],
             'source_name' => ['required', 'string', 'max:255'],
             'environment' => ['required', 'string', 'max:50'],
-            'ses_region' => ['required', 'string', 'max:50'],
+            'ses_region' => ['required_unless:credential_mode,cloudflare_token', 'nullable', 'string', 'max:50'],
             'ses_configuration_set' => ['nullable', 'string', 'max:255'],
+            'cloudflare_account_id' => ['nullable', 'string', 'max:64'],
+            'cloudflare_api_token' => ['required_if:credential_mode,cloudflare_token', 'nullable', 'string', 'max:255'],
             'default_from_name' => ['nullable', 'string', 'max:255'],
             'default_from_email' => ['nullable', 'email:rfc', 'max:255'],
             'aws_access_key_id' => ['required_if:credential_mode,aws_keys', 'nullable', 'string', 'max:255'],

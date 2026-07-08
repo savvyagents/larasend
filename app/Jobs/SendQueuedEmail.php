@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Events\EmailActivityUpdated;
 use App\Models\Email;
-use App\Services\SesV2Client;
+use App\Services\Providers\EmailProviderFactory;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Storage;
@@ -28,9 +28,9 @@ class SendQueuedEmail implements ShouldQueue
 
     public function __construct(public int $emailId) {}
 
-    public function handle(SesV2Client $sesClient): void
+    public function handle(EmailProviderFactory $providers): void
     {
-        $email = Email::query()->with('source')->findOrFail($this->emailId);
+        $email = Email::query()->with(['source', 'recipients'])->findOrFail($this->emailId);
 
         // 'sending' is allowed through so a retry can recover an email whose
         // previous attempt died mid-flight (worker crash, timeout).
@@ -50,7 +50,10 @@ class SendQueuedEmail implements ShouldQueue
                 throw new \RuntimeException("Stored MIME content is missing for {$email->public_id}.");
             }
 
-            $result = $sesClient->sendRawEmail($email->source, $mime);
+            $result = $providers->forSource($email->source)->sendRawEmail($email->source, $mime, [
+                'from' => $email->from_email,
+                'recipients' => $email->recipients->pluck('email')->all(),
+            ]);
         } catch (Throwable $exception) {
             // Stay in 'sending' so the queue's remaining attempts get past the
             // status guard above; failed() marks it failed after the last one.

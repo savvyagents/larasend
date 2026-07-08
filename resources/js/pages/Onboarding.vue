@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, Link, useForm } from '@inertiajs/vue3';
+import { Head, Link, useForm, useHttp } from '@inertiajs/vue3';
 import {
     ArrowLeft,
     ArrowRight,
@@ -15,7 +15,11 @@ import {
 } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
 
-type CredentialMode = 'instance_role' | 'aws_keys' | 'configure_later';
+type CredentialMode =
+    | 'instance_role'
+    | 'aws_keys'
+    | 'cloudflare_token'
+    | 'configure_later';
 
 type DnsRecord = {
     type: string;
@@ -59,13 +63,16 @@ const props = defineProps<{
     source: {
         name: string;
         environment: string;
-        ses_region: string;
+        provider: 'ses' | 'cloudflare';
+        ses_region: string | null;
         ses_configuration_set: string | null;
+        cloudflare_account_id: string | null;
         default_from_name: string | null;
         default_from_email: string | null;
         has_aws_credentials: boolean;
         has_aws_session_token: boolean;
-        webhook_url: string;
+        has_cloudflare_credentials: boolean;
+        webhook_url: string | null;
     } | null;
     domain: {
         domain: string;
@@ -93,6 +100,8 @@ const form = useForm({
     aws_access_key_id: '',
     aws_secret_access_key: '',
     aws_session_token: '',
+    cloudflare_account_id: props.source?.cloudflare_account_id ?? '',
+    cloudflare_api_token: '',
     sending_domain: props.domain?.domain ?? '',
     create_api_key: true,
     api_key_name: 'Production key',
@@ -101,58 +110,152 @@ const form = useForm({
 
 const wizardSteps: WizardStep[] = [
     {
-        key: 'basics',
-        label: 'Basics',
+        key: 'connect',
+        label: 'Connect provider',
         eyebrow: 'Step 1',
-        title: 'Name the workspace and first project',
+        title: 'Connect your email provider',
         description:
-            'This creates the shared workspace and the first project that will own sources, domains, API keys, and email activity.',
+            'Send through Amazon SES with IAM keys or an attached role, or through Cloudflare Email Service with an API token. Larasend verifies the credentials live before continuing.',
     },
     {
-        key: 'credentials',
-        label: 'Source',
+        key: 'domain',
+        label: 'Sending domain',
         eyebrow: 'Step 2',
-        title: 'Choose how Larasend will reach SES',
+        title: 'Choose your sending domain',
         description:
-            'Self-hosters can paste IAM keys, AWS deployments can use an attached role, and evaluators can configure credentials later.',
-    },
-    {
-        key: 'sender',
-        label: 'Sender',
-        eyebrow: 'Step 3',
-        title: 'Set the default sender and optional domain',
-        description:
-            'When credentials are available, Larasend creates the SES identity and returns DKIM records. Otherwise the domain is saved for setup.',
-    },
-    {
-        key: 'api-key',
-        label: 'API key',
-        eyebrow: 'Step 4',
-        title: 'Create the first application key',
-        description:
-            'The key is shown once after save. Use it from a Laravel app through the Larasend mail transport or HTTP API.',
+            'Larasend onboards the domain with your provider and publishes its DNS records automatically, then verifies them in the background.',
     },
     {
         key: 'finish',
         label: 'Finish',
-        eyebrow: 'Step 5',
-        title: 'Continue in the setup guide',
+        eyebrow: 'Step 3',
+        title: 'Save and start sending',
         description:
-            'After this save, the setup page becomes the operational checklist for DNS, quota, SES events, and the first real test send.',
+            'Saving creates your first API key (shown once), onboards the domain, and hands over to the setup board — which completes itself from here.',
     },
 ];
 
 const currentStep = computed(() => wizardSteps[currentStepIndex.value]);
 const isFirstStep = computed(() => currentStepIndex.value === 0);
-const isLastStep = computed(() => currentStepIndex.value === wizardSteps.length - 1);
+const isLastStep = computed(
+    () => currentStepIndex.value === wizardSteps.length - 1,
+);
 const completedCount = computed(
     () => props.progress.filter((step) => step.complete).length,
 );
 const completionPercent = computed(() =>
-    Math.round((completedCount.value / Math.max(props.progress.length, 1)) * 100),
+    Math.round(
+        (completedCount.value / Math.max(props.progress.length, 1)) * 100,
+    ),
 );
 const dnsRows = computed(() => props.domain?.dns_records ?? []);
 const canShowAwsFields = computed(() => form.credential_mode === 'aws_keys');
+const isCloudflareMode = computed(
+    () => form.credential_mode === 'cloudflare_token',
+);
+
+type ValidationIssue = { code: string; message: string };
+type ZoneOption = { id: string; name: string; account_id: string | null };
+type CredentialCheck = {
+    ok: boolean;
+    blockers: ValidationIssue[];
+    warnings: ValidationIssue[];
+    meta: {
+        zones?: ZoneOption[];
+        account_id?: string | null;
+        quota?: { max_24_hour_send: number | null; period?: string } | null;
+    };
+};
+
+const credentialCheck = ref<CredentialCheck | null>(null);
+const validationFailed = ref(false);
+const validationHttp = useHttp({
+    provider: 'ses',
+    ses_region: '',
+    aws_access_key_id: '',
+    aws_secret_access_key: '',
+    aws_session_token: '',
+    cloudflare_api_token: '',
+});
+
+const availableZones = computed<ZoneOption[]>(
+    () => credentialCheck.value?.meta.zones ?? [],
+);
+const selectedZoneName = ref('');
+const subdomainLabel = ref('mail');
+const fromLocalPart = ref('notifications');
+const skipsValidation = computed(
+    () => form.credential_mode === 'configure_later',
+);
+
+// Keep form.sending_domain and the from-address suggestion in sync with the
+// zone picker, without clobbering values the user typed by hand.
+watch([selectedZoneName, subdomainLabel], ([zone, label]) => {
+    if (!zone) {
+        return;
+    }
+
+    form.sending_domain = label ? `${label}.${zone}` : zone;
+});
+
+watch(
+    () => form.sending_domain,
+    (domain) => {
+        if (domain) {
+            form.default_from_email = `${fromLocalPart.value}@${domain}`;
+        }
+    },
+);
+
+function validateCredentials(): void {
+    validationFailed.value = false;
+    validationHttp.provider = isCloudflareMode.value ? 'cloudflare' : 'ses';
+    validationHttp.ses_region = form.ses_region;
+    validationHttp.aws_access_key_id = form.aws_access_key_id;
+    validationHttp.aws_secret_access_key = form.aws_secret_access_key;
+    validationHttp.aws_session_token = form.aws_session_token;
+    validationHttp.cloudflare_api_token = form.cloudflare_api_token;
+
+    validationHttp.post('/onboarding/validate', {
+        onSuccess: (response: unknown) => {
+            const result = (
+                response && typeof response === 'object' && 'data' in response
+                    ? (response as { data: CredentialCheck }).data
+                    : response
+            ) as CredentialCheck;
+
+            credentialCheck.value = result;
+
+            if (result.ok) {
+                if (
+                    availableZones.value.length &&
+                    !selectedZoneName.value &&
+                    !form.sending_domain
+                ) {
+                    selectedZoneName.value = availableZones.value[0].name;
+                }
+
+                currentStepIndex.value += 1;
+            }
+        },
+        onError: () => {
+            validationFailed.value = true;
+        },
+    });
+}
+const cloudflareTokenUrl = computed(() => {
+    // Email Sending Edit to send, Zone Read + DNS Edit so Larasend can
+    // onboard sending domains and publish their records automatically.
+    const permissions = encodeURIComponent(
+        JSON.stringify([
+            { key: 'email_sending', type: 'edit' },
+            { key: 'zone', type: 'read' },
+            { key: 'dns', type: 'edit' },
+        ]),
+    );
+
+    return `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${permissions}&name=Larasend%20Email%20Sending`;
+});
 const codeSnippet = computed(() =>
     [
         'MAIL_MAILER=larasend',
@@ -167,7 +270,10 @@ const nextSetupLabel = computed(
 watch(
     () => form.project_name,
     (name) => {
-        if (!props.project.has_started_setup && form.project_slug === props.project.slug) {
+        if (
+            !props.project.has_started_setup &&
+            form.project_slug === props.project.slug
+        ) {
             form.project_slug = slugify(name);
         }
     },
@@ -193,9 +299,17 @@ function copy(value: string, key: string): void {
 }
 
 function goNext(): void {
-    if (!isLastStep.value) {
-        currentStepIndex.value += 1;
+    if (isLastStep.value) {
+        return;
     }
+
+    if (currentStep.value.key === 'connect' && !skipsValidation.value) {
+        validateCredentials();
+
+        return;
+    }
+
+    currentStepIndex.value += 1;
 }
 
 function goBack(): void {
@@ -215,24 +329,18 @@ function submit(): void {
             if (
                 form.errors.aws_access_key_id ||
                 form.errors.aws_secret_access_key ||
-                form.errors.credential_mode
-            ) {
-                currentStepIndex.value = 1;
-
-                return;
-            }
-
-            if (
-                form.errors.default_from_email ||
-                form.errors.sending_domain ||
+                form.errors.cloudflare_api_token ||
+                form.errors.credential_mode ||
                 form.errors.ses_region
             ) {
-                currentStepIndex.value = 2;
+                currentStepIndex.value = 0;
 
                 return;
             }
 
-            currentStepIndex.value = 0;
+            if (form.errors.default_from_email || form.errors.sending_domain) {
+                currentStepIndex.value = 1;
+            }
         },
     });
 }
@@ -327,7 +435,10 @@ function submit(): void {
                                         : 'border-zinc-300 text-zinc-500 dark:border-zinc-700'
                                 "
                             >
-                                <Check v-if="index < currentStepIndex" class="size-3" />
+                                <Check
+                                    v-if="index < currentStepIndex"
+                                    class="size-3"
+                                />
                                 <span v-else>{{ index + 1 }}</span>
                             </span>
                             <span class="font-medium">{{ step.label }}</span>
@@ -379,55 +490,12 @@ function submit(): void {
 
                     <div class="grid gap-4 p-5">
                         <div
-                            v-if="currentStep.key === 'basics'"
-                            class="grid gap-4 md:grid-cols-3"
-                        >
-                            <label class="grid gap-1.5">
-                                <span class="text-zinc-500">Workspace</span>
-                                <input
-                                    v-model="form.workspace_name"
-                                    required
-                                    class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
-                                />
-                                <span
-                                    v-if="form.errors.workspace_name"
-                                    class="text-xs text-red-500"
-                                    >{{ form.errors.workspace_name }}</span
-                                >
-                            </label>
-                            <label class="grid gap-1.5">
-                                <span class="text-zinc-500">Project</span>
-                                <input
-                                    v-model="form.project_name"
-                                    required
-                                    class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
-                                />
-                                <span
-                                    v-if="form.errors.project_name"
-                                    class="text-xs text-red-500"
-                                    >{{ form.errors.project_name }}</span
-                                >
-                            </label>
-                            <label class="grid gap-1.5">
-                                <span class="text-zinc-500">Project slug</span>
-                                <input
-                                    v-model="form.project_slug"
-                                    required
-                                    class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
-                                />
-                                <span
-                                    v-if="form.errors.project_slug"
-                                    class="text-xs text-red-500"
-                                    >{{ form.errors.project_slug }}</span
-                                >
-                            </label>
-                        </div>
-
-                        <div
-                            v-else-if="currentStep.key === 'credentials'"
+                            v-if="currentStep.key === 'connect'"
                             class="grid gap-4"
                         >
-                            <div class="grid gap-3 md:grid-cols-3">
+                            <div
+                                class="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
+                            >
                                 <label
                                     class="grid cursor-pointer gap-2 rounded-lg border p-3 transition"
                                     :class="
@@ -443,10 +511,16 @@ function submit(): void {
                                         value="aws_keys"
                                     />
                                     <ShieldCheck class="size-4 text-teal-500" />
+                                    <span
+                                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                                        >Amazon SES</span
+                                    >
                                     <span class="font-semibold">IAM keys</span>
-                                    <span class="text-xs leading-5 text-zinc-500">
-                                        Paste an access key and secret for a
-                                        self-hosted Docker install.
+                                    <span
+                                        class="text-xs leading-5 text-zinc-500"
+                                    >
+                                        Paste an AWS access key and secret for a
+                                        self-hosted install.
                                     </span>
                                 </label>
                                 <label
@@ -464,8 +538,16 @@ function submit(): void {
                                         value="instance_role"
                                     />
                                     <Server class="size-4 text-teal-500" />
-                                    <span class="font-semibold">Instance role</span>
-                                    <span class="text-xs leading-5 text-zinc-500">
+                                    <span
+                                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                                        >Amazon SES</span
+                                    >
+                                    <span class="font-semibold"
+                                        >Instance role</span
+                                    >
+                                    <span
+                                        class="text-xs leading-5 text-zinc-500"
+                                    >
                                         Use the IAM role attached to the AWS
                                         host running Larasend.
                                     </span>
@@ -473,7 +555,36 @@ function submit(): void {
                                 <label
                                     class="grid cursor-pointer gap-2 rounded-lg border p-3 transition"
                                     :class="
-                                        form.credential_mode === 'configure_later'
+                                        form.credential_mode ===
+                                        'cloudflare_token'
+                                            ? 'border-teal-300 bg-teal-50 dark:bg-teal-400/10'
+                                            : 'border-zinc-200 dark:border-zinc-800'
+                                    "
+                                >
+                                    <input
+                                        v-model="form.credential_mode"
+                                        class="sr-only"
+                                        type="radio"
+                                        value="cloudflare_token"
+                                    />
+                                    <KeyRound class="size-4 text-teal-500" />
+                                    <span
+                                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                                        >Cloudflare</span
+                                    >
+                                    <span class="font-semibold">API token</span>
+                                    <span
+                                        class="text-xs leading-5 text-zinc-500"
+                                    >
+                                        Send through Cloudflare Email Service
+                                        with a scoped API token.
+                                    </span>
+                                </label>
+                                <label
+                                    class="grid cursor-pointer gap-2 rounded-lg border p-3 transition"
+                                    :class="
+                                        form.credential_mode ===
+                                        'configure_later'
                                             ? 'border-teal-300 bg-teal-50 dark:bg-teal-400/10'
                                             : 'border-zinc-200 dark:border-zinc-800'
                                     "
@@ -485,9 +596,17 @@ function submit(): void {
                                         value="configure_later"
                                     />
                                     <Rocket class="size-4 text-teal-500" />
-                                    <span class="font-semibold">Configure later</span>
-                                    <span class="text-xs leading-5 text-zinc-500">
-                                        Save the project now and finish AWS
+                                    <span
+                                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                                        >Any provider</span
+                                    >
+                                    <span class="font-semibold"
+                                        >Configure later</span
+                                    >
+                                    <span
+                                        class="text-xs leading-5 text-zinc-500"
+                                    >
+                                        Save the project now and finish provider
                                         wiring from the setup guide.
                                     </span>
                                 </label>
@@ -495,27 +614,36 @@ function submit(): void {
 
                             <div class="grid gap-3 md:grid-cols-3">
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">Source name</span>
+                                    <span class="text-zinc-500"
+                                        >Source name</span
+                                    >
                                     <input
                                         v-model="form.source_name"
                                         required
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                 </label>
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">Environment</span>
+                                    <span class="text-zinc-500"
+                                        >Environment</span
+                                    >
                                     <input
                                         v-model="form.environment"
                                         required
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                 </label>
-                                <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">SES region</span>
+                                <label
+                                    v-if="!isCloudflareMode"
+                                    class="grid gap-1.5"
+                                >
+                                    <span class="text-zinc-500"
+                                        >SES region</span
+                                    >
                                     <input
                                         v-model="form.ses_region"
                                         required
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                 </label>
                             </div>
@@ -525,88 +653,282 @@ function submit(): void {
                                 class="grid gap-3 md:grid-cols-3"
                             >
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">AWS access key ID</span>
+                                    <span class="text-zinc-500"
+                                        >AWS access key ID</span
+                                    >
                                     <input
                                         v-model="form.aws_access_key_id"
                                         autocomplete="off"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                     <span
                                         v-if="form.errors.aws_access_key_id"
                                         class="text-xs text-red-500"
-                                        >{{ form.errors.aws_access_key_id }}</span
+                                        >{{
+                                            form.errors.aws_access_key_id
+                                        }}</span
                                     >
                                 </label>
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">AWS secret access key</span>
+                                    <span class="text-zinc-500"
+                                        >AWS secret access key</span
+                                    >
                                     <input
                                         v-model="form.aws_secret_access_key"
                                         autocomplete="off"
                                         type="password"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                     <span
                                         v-if="form.errors.aws_secret_access_key"
                                         class="text-xs text-red-500"
-                                        >{{ form.errors.aws_secret_access_key }}</span
+                                        >{{
+                                            form.errors.aws_secret_access_key
+                                        }}</span
                                     >
                                 </label>
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">AWS session token</span>
+                                    <span class="text-zinc-500"
+                                        >AWS session token</span
+                                    >
                                     <input
                                         v-model="form.aws_session_token"
                                         autocomplete="off"
                                         placeholder="Optional STS token"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                 </label>
                             </div>
 
                             <div
-                                v-else-if="form.credential_mode === 'instance_role'"
+                                v-else-if="isCloudflareMode"
+                                class="grid gap-3"
+                            >
+                                <label class="grid max-w-xl gap-1.5">
+                                    <span class="text-zinc-500"
+                                        >Cloudflare API token</span
+                                    >
+                                    <input
+                                        v-model="form.cloudflare_api_token"
+                                        autocomplete="new-password"
+                                        type="password"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                    />
+                                    <span class="text-xs text-zinc-500"
+                                        >That's the only credential needed — the
+                                        account and zones are detected from
+                                        it.</span
+                                    >
+                                    <span
+                                        v-if="form.errors.cloudflare_api_token"
+                                        class="text-xs text-red-500"
+                                        >{{
+                                            form.errors.cloudflare_api_token
+                                        }}</span
+                                    >
+                                </label>
+                                <div
+                                    class="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
+                                >
+                                    Requires the Workers Paid plan and a domain
+                                    on Cloudflare DNS.
+                                    <a
+                                        :href="cloudflareTokenUrl"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="font-semibold underline"
+                                        >Create a token</a
+                                    >
+                                    with Email Sending Edit, Zone Read, and DNS
+                                    Edit — Larasend then onboards your sending
+                                    domain in Cloudflare automatically.
+                                </div>
+                            </div>
+
+                            <div
+                                v-else-if="
+                                    form.credential_mode === 'instance_role'
+                                "
                                 class="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
                             >
                                 Attach an IAM role with SES permissions to the
                                 compute host that runs Larasend. No AWS keys
                                 will be stored in the database for this source.
                             </div>
+
+                            <div
+                                v-if="credentialCheck && !credentialCheck.ok"
+                                class="grid gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-950 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100"
+                            >
+                                <div class="font-semibold">
+                                    Larasend checked these credentials and found
+                                    a blocker:
+                                </div>
+                                <div
+                                    v-for="blocker in credentialCheck.blockers"
+                                    :key="blocker.code"
+                                >
+                                    {{ blocker.message }}
+                                </div>
+                            </div>
+                            <div
+                                v-else-if="
+                                    credentialCheck?.warnings.length &&
+                                    credentialCheck.ok
+                                "
+                                class="grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100"
+                            >
+                                <div
+                                    v-for="warning in credentialCheck.warnings"
+                                    :key="warning.code"
+                                >
+                                    {{ warning.message }}
+                                </div>
+                            </div>
+                            <div
+                                v-if="validationFailed"
+                                class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-950 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100"
+                            >
+                                Could not run the credential check. Try again,
+                                or choose "Configure later" and finish from the
+                                setup guide.
+                            </div>
+
+                            <details
+                                class="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                            >
+                                <summary
+                                    class="cursor-pointer text-sm font-semibold text-zinc-600 dark:text-zinc-400"
+                                >
+                                    Workspace & project names (optional)
+                                </summary>
+                                <div class="mt-3 grid gap-3 md:grid-cols-3">
+                                    <label class="grid gap-1.5">
+                                        <span class="text-zinc-500"
+                                            >Workspace</span
+                                        >
+                                        <input
+                                            v-model="form.workspace_name"
+                                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        />
+                                    </label>
+                                    <label class="grid gap-1.5">
+                                        <span class="text-zinc-500"
+                                            >Project</span
+                                        >
+                                        <input
+                                            v-model="form.project_name"
+                                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        />
+                                    </label>
+                                    <label class="grid gap-1.5">
+                                        <span class="text-zinc-500"
+                                            >Project slug</span
+                                        >
+                                        <input
+                                            v-model="form.project_slug"
+                                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        />
+                                        <span
+                                            v-if="form.errors.project_slug"
+                                            class="text-xs text-red-500"
+                                            >{{
+                                                form.errors.project_slug
+                                            }}</span
+                                        >
+                                    </label>
+                                </div>
+                            </details>
                         </div>
 
                         <div
-                            v-else-if="currentStep.key === 'sender'"
+                            v-else-if="currentStep.key === 'domain'"
                             class="grid gap-4"
                         >
+                            <div
+                                v-if="isCloudflareMode && availableZones.length"
+                                class="grid gap-3 md:grid-cols-[1fr_auto_1.4fr]"
+                            >
+                                <label class="grid gap-1.5">
+                                    <span class="text-zinc-500"
+                                        >Subdomain (optional)</span
+                                    >
+                                    <input
+                                        v-model="subdomainLabel"
+                                        placeholder="mail"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                    />
+                                </label>
+                                <div
+                                    class="hidden items-end pb-2.5 font-mono text-zinc-400 md:flex"
+                                >
+                                    .
+                                </div>
+                                <label class="grid gap-1.5">
+                                    <span class="text-zinc-500"
+                                        >Zone on your Cloudflare account</span
+                                    >
+                                    <select
+                                        v-model="selectedZoneName"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                    >
+                                        <option
+                                            v-for="zone in availableZones"
+                                            :key="zone.id"
+                                            :value="zone.name"
+                                        >
+                                            {{ zone.name }}
+                                        </option>
+                                    </select>
+                                </label>
+                            </div>
                             <div class="grid gap-3 md:grid-cols-2">
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">Default from email</span>
+                                    <span class="text-zinc-500"
+                                        >Default from email</span
+                                    >
                                     <input
                                         v-model="form.default_from_email"
                                         type="email"
                                         placeholder="notifications@mail.example.com"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                     <span
                                         v-if="form.errors.default_from_email"
                                         class="text-xs text-red-500"
-                                        >{{ form.errors.default_from_email }}</span
+                                        >{{
+                                            form.errors.default_from_email
+                                        }}</span
                                     >
                                 </label>
                                 <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">Default from name</span>
+                                    <span class="text-zinc-500"
+                                        >Default from name</span
+                                    >
                                     <input
                                         v-model="form.default_from_name"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                 </label>
                             </div>
 
                             <div class="grid gap-3 md:grid-cols-[1fr_1fr]">
-                                <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">Sending domain</span>
+                                <label
+                                    v-if="
+                                        !(
+                                            isCloudflareMode &&
+                                            availableZones.length
+                                        )
+                                    "
+                                    class="grid gap-1.5"
+                                >
+                                    <span class="text-zinc-500"
+                                        >Sending domain</span
+                                    >
                                     <input
                                         v-model="form.sending_domain"
                                         placeholder="mail.example.com"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                     <span
                                         v-if="form.errors.sending_domain"
@@ -614,12 +936,32 @@ function submit(): void {
                                         >{{ form.errors.sending_domain }}</span
                                     >
                                 </label>
-                                <label class="grid gap-1.5">
-                                    <span class="text-zinc-500">SES configuration set</span>
+                                <div v-else class="grid content-start gap-1.5">
+                                    <span class="text-zinc-500"
+                                        >Sending domain</span
+                                    >
+                                    <div
+                                        class="flex h-9 items-center rounded-md border border-zinc-200 bg-zinc-50 px-2.5 font-mono text-[13px] text-zinc-700 dark:border-zinc-800 dark:bg-[#0b0c0d] dark:text-zinc-300"
+                                    >
+                                        {{ form.sending_domain || '—' }}
+                                    </div>
+                                    <span
+                                        v-if="form.errors.sending_domain"
+                                        class="text-xs text-red-500"
+                                        >{{ form.errors.sending_domain }}</span
+                                    >
+                                </div>
+                                <label
+                                    v-if="!isCloudflareMode"
+                                    class="grid gap-1.5"
+                                >
+                                    <span class="text-zinc-500"
+                                        >SES configuration set</span
+                                    >
                                     <input
                                         v-model="form.ses_configuration_set"
                                         placeholder="Optional"
-                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-zinc-800 dark:bg-[#0b0c0d]"
                                     />
                                 </label>
                             </div>
@@ -642,7 +984,9 @@ function submit(): void {
                                     :key="`${record.name}-${index}`"
                                     class="grid min-w-[760px] grid-cols-[72px_minmax(240px,1fr)_38px_minmax(240px,1.15fr)_38px] items-center border-t border-zinc-200 px-3 py-2 dark:border-[#1d2125]"
                                 >
-                                    <div class="font-mono">{{ record.type }}</div>
+                                    <div class="font-mono">
+                                        {{ record.type }}
+                                    </div>
                                     <div class="truncate font-mono text-xs">
                                         {{ record.name }}
                                     </div>
@@ -650,25 +994,41 @@ function submit(): void {
                                         type="button"
                                         class="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 active:translate-y-px dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                                         aria-label="Copy DNS host"
-                                        @click="copy(record.name, `dns-name-${index}`)"
+                                        @click="
+                                            copy(
+                                                record.name,
+                                                `dns-name-${index}`,
+                                            )
+                                        "
                                     >
                                         <Check
-                                            v-if="copied === `dns-name-${index}`"
+                                            v-if="
+                                                copied === `dns-name-${index}`
+                                            "
                                             class="size-3.5"
                                         />
                                         <Copy v-else class="size-3.5" />
                                     </button>
-                                    <div class="truncate font-mono text-xs text-zinc-500">
+                                    <div
+                                        class="truncate font-mono text-xs text-zinc-500"
+                                    >
                                         {{ record.value }}
                                     </div>
                                     <button
                                         type="button"
                                         class="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 active:translate-y-px dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                                         aria-label="Copy DNS value"
-                                        @click="copy(record.value, `dns-value-${index}`)"
+                                        @click="
+                                            copy(
+                                                record.value,
+                                                `dns-value-${index}`,
+                                            )
+                                        "
                                     >
                                         <Check
-                                            v-if="copied === `dns-value-${index}`"
+                                            v-if="
+                                                copied === `dns-value-${index}`
+                                            "
                                             class="size-3.5"
                                         />
                                         <Copy v-else class="size-3.5" />
@@ -677,102 +1037,133 @@ function submit(): void {
                             </div>
                         </div>
 
-                        <div
-                            v-else-if="currentStep.key === 'api-key'"
-                            class="grid gap-4 md:grid-cols-[1fr_1fr]"
-                        >
-                            <div class="grid min-w-0 gap-3">
-                                <div class="flex items-center gap-2.5">
-                                    <KeyRound class="size-4 text-teal-500" />
-                                    <div>
-                                        <h3 class="font-semibold">First application key</h3>
-                                        <p class="text-[12px] text-zinc-500">
-                                            Leave enabled for the easiest Laravel app connection.
-                                        </p>
+                        <div v-else class="grid gap-4">
+                            <div
+                                class="grid gap-4 rounded-lg border border-zinc-200 p-4 md:grid-cols-[1fr_1.2fr] dark:border-zinc-800"
+                            >
+                                <div class="grid min-w-0 content-start gap-2">
+                                    <div class="flex items-center gap-2.5">
+                                        <KeyRound
+                                            class="size-4 text-teal-500"
+                                        />
+                                        <h3 class="font-semibold">
+                                            Your first API key
+                                        </h3>
+                                    </div>
+                                    <p class="text-sm text-zinc-500">
+                                        Saving creates a "Production key"
+                                        automatically and shows it once on the
+                                        next screen. Use it with this
+                                        environment config in the Laravel app
+                                        that sends mail:
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-[#0b0c0d]"
+                                >
+                                    <div class="mb-2 flex items-center gap-2">
+                                        <Send class="size-4 text-teal-500" />
+                                        <span class="font-semibold"
+                                            >Laravel env</span
+                                        >
+                                    </div>
+                                    <div class="flex items-start gap-2">
+                                        <code
+                                            class="min-w-0 flex-1 font-mono text-[11.5px] leading-5 whitespace-pre-wrap"
+                                            >{{ codeSnippet }}</code
+                                        >
+                                        <button
+                                            type="button"
+                                            class="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 active:translate-y-px dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                                            aria-label="Copy Laravel environment snippet"
+                                            @click="
+                                                copy(codeSnippet, 'env-snippet')
+                                            "
+                                        >
+                                            <Check
+                                                v-if="copied === 'env-snippet'"
+                                                class="size-3.5"
+                                            />
+                                            <Copy v-else class="size-3.5" />
+                                        </button>
                                     </div>
                                 </div>
-                                <label class="flex items-center gap-2">
-                                    <input
-                                        v-model="form.create_api_key"
-                                        type="checkbox"
-                                        class="size-4 rounded border-zinc-300 accent-teal-400"
-                                    />
-                                    Create the first production key
-                                </label>
-                                <input
-                                    v-model="form.api_key_name"
-                                    :disabled="!form.create_api_key"
-                                    class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 disabled:opacity-50 dark:border-zinc-800 dark:bg-[#0b0c0d]"
-                                />
                             </div>
 
-                            <div
-                                class="rounded-md border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-[#0b0c0d]"
-                            >
-                                <div class="mb-2 flex items-center gap-2">
-                                    <Send class="size-4 text-teal-500" />
-                                    <span class="font-semibold">Laravel env</span>
-                                </div>
-                                <div class="flex items-start gap-2">
-                                    <code
-                                        class="min-w-0 flex-1 whitespace-pre-wrap font-mono text-[11.5px] leading-5"
-                                        >{{ codeSnippet }}</code
-                                    >
-                                    <button
-                                        type="button"
-                                        class="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 active:translate-y-px dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                                        aria-label="Copy Laravel environment snippet"
-                                        @click="copy(codeSnippet, 'env-snippet')"
-                                    >
-                                        <Check
-                                            v-if="copied === 'env-snippet'"
-                                            class="size-3.5"
+                            <div class="grid gap-4 md:grid-cols-2">
+                                <div
+                                    class="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                                >
+                                    <div class="flex items-center gap-2.5">
+                                        <MailCheck
+                                            class="size-4 text-teal-500"
                                         />
-                                        <Copy v-else class="size-3.5" />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div v-else class="grid gap-4 md:grid-cols-2">
-                            <div
-                                class="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
-                            >
-                                <div class="flex items-center gap-2.5">
-                                    <MailCheck class="size-4 text-teal-500" />
-                                    <h3 class="font-semibold">What happens next</h3>
-                                </div>
-                                <div class="mt-3 grid gap-2 text-sm text-zinc-500">
-                                    <div>1. Publish DKIM records for the domain.</div>
-                                    <div>2. Sync quota and confirm source health.</div>
-                                    <div>3. Connect SES event publishing to Larasend.</div>
-                                    <div>4. Send one real test email.</div>
-                                </div>
-                            </div>
-                            <div
-                                class="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
-                            >
-                                <div class="flex items-center gap-2.5">
-                                    <Webhook class="size-4 text-teal-500" />
-                                    <h3 class="font-semibold">SES/SNS source URL</h3>
-                                </div>
-                                <div class="mt-3 flex min-w-0 items-center gap-2">
-                                    <code class="min-w-0 flex-1 truncate font-mono text-xs">
-                                        {{ source?.webhook_url || 'Created after source save' }}
-                                    </code>
-                                    <button
-                                        v-if="source?.webhook_url"
-                                        type="button"
-                                        class="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 active:translate-y-px dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
-                                        aria-label="Copy SES webhook URL"
-                                        @click="copy(source.webhook_url, 'ses-webhook')"
+                                        <h3 class="font-semibold">
+                                            What happens next
+                                        </h3>
+                                    </div>
+                                    <div
+                                        class="mt-3 grid gap-2 text-sm text-zinc-500"
                                     >
-                                        <Check
-                                            v-if="copied === 'ses-webhook'"
-                                            class="size-3.5"
-                                        />
-                                        <Copy v-else class="size-3.5" />
-                                    </button>
+                                        <div>
+                                            1. Publish DKIM records for the
+                                            domain.
+                                        </div>
+                                        <div>
+                                            2. Sync quota and confirm source
+                                            health.
+                                        </div>
+                                        <div>
+                                            3.
+                                            {{
+                                                isCloudflareMode
+                                                    ? 'Suppressions sync hourly from Cloudflare.'
+                                                    : 'Connect SES event publishing to Larasend.'
+                                            }}
+                                        </div>
+                                        <div>4. Send one real test email.</div>
+                                    </div>
+                                </div>
+                                <div
+                                    v-if="!isCloudflareMode"
+                                    class="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                                >
+                                    <div class="flex items-center gap-2.5">
+                                        <Webhook class="size-4 text-teal-500" />
+                                        <h3 class="font-semibold">
+                                            SES/SNS source URL
+                                        </h3>
+                                    </div>
+                                    <div
+                                        class="mt-3 flex min-w-0 items-center gap-2"
+                                    >
+                                        <code
+                                            class="min-w-0 flex-1 truncate font-mono text-xs"
+                                        >
+                                            {{
+                                                source?.webhook_url ||
+                                                'Created after source save'
+                                            }}
+                                        </code>
+                                        <button
+                                            v-if="source?.webhook_url"
+                                            type="button"
+                                            class="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 active:translate-y-px dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                                            aria-label="Copy SES webhook URL"
+                                            @click="
+                                                copy(
+                                                    source.webhook_url,
+                                                    'ses-webhook',
+                                                )
+                                            "
+                                        >
+                                            <Check
+                                                v-if="copied === 'ses-webhook'"
+                                                class="size-3.5"
+                                            />
+                                            <Copy v-else class="size-3.5" />
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -795,10 +1186,18 @@ function submit(): void {
                         <button
                             v-if="!isLastStep"
                             type="button"
-                            class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-2 text-[13px] font-bold text-zinc-950 transition hover:brightness-105 active:translate-y-px"
+                            class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-2 text-[13px] font-bold text-zinc-950 transition hover:brightness-105 active:translate-y-px disabled:cursor-wait disabled:opacity-60"
+                            :disabled="validationHttp.processing"
                             @click="goNext"
                         >
-                            Continue
+                            {{
+                                validationHttp.processing
+                                    ? 'Checking credentials...'
+                                    : currentStep.key === 'connect' &&
+                                        !skipsValidation
+                                      ? 'Verify & continue'
+                                      : 'Continue'
+                            }}
                             <ArrowRight class="size-4" />
                         </button>
                         <button

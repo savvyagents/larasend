@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\SourceProvider;
 use App\Models\Email;
 use App\Models\Project;
 use App\Models\Source;
@@ -9,7 +10,9 @@ use App\Models\Suppression;
 use App\Models\User;
 use App\Models\WebhookDelivery;
 use App\Models\WebhookEndpoint;
+use App\Services\Providers\EmailProviderFactory;
 use App\Support\ProjectContext;
+use App\Support\SystemHealth;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Http\RedirectResponse;
@@ -21,6 +24,11 @@ use Inertia\Response;
 
 class ActivityController extends Controller
 {
+    public function __construct(
+        private EmailProviderFactory $providers,
+        private SystemHealth $systemHealth,
+    ) {}
+
     public function __invoke(Request $request, ProjectContext $context): Response|RedirectResponse
     {
         $user = $request->user();
@@ -37,9 +45,11 @@ class ActivityController extends Controller
         $section = (string) $request->route('section', 'activity');
 
         if ($section === 'send' && (! $source || ! $this->canSend($project, $source))) {
+            $label = ($source?->provider ?? SourceProvider::Ses)->label();
+
             Inertia::flash('toast', [
                 'type' => 'error',
-                'message' => 'Connect SES credentials and verify a sending domain before sending real email.',
+                'message' => "Connect {$label} credentials and verify a sending domain before sending real email.",
             ]);
 
             return redirect($context->sectionPath($project, 'identities'));
@@ -57,7 +67,9 @@ class ActivityController extends Controller
                 'name' => $project->name,
                 'slug' => $project->slug,
                 'environment' => $source?->environment ?? $project->default_environment,
-                'region' => $source?->ses_region ?? 'us-east-1',
+                'provider' => ($source?->provider ?? SourceProvider::Ses)->value,
+                'provider_label' => ($source?->provider ?? SourceProvider::Ses)->label(),
+                'region' => $source?->provider === SourceProvider::Cloudflare ? null : ($source?->ses_region ?? 'us-east-1'),
                 'path' => $context->sectionPath($project),
                 'exportPath' => $context->exportPath($project),
             ],
@@ -74,7 +86,10 @@ class ActivityController extends Controller
                 'name' => $workspaceProject->name,
                 'slug' => $workspaceProject->slug,
                 'environment' => $workspaceProject->sources->first()?->environment ?? $workspaceProject->default_environment,
-                'region' => $workspaceProject->sources->first()?->ses_region ?? 'us-east-1',
+                'provider_label' => ($workspaceProject->sources->first()?->provider ?? SourceProvider::Ses)->label(),
+                'region' => $workspaceProject->sources->first()?->provider === SourceProvider::Cloudflare
+                    ? null
+                    : ($workspaceProject->sources->first()?->ses_region ?? 'us-east-1'),
                 'emails_count' => $workspaceProject->emails_count,
                 'domains_count' => $workspaceProject->domains_count,
                 'is_current' => $workspaceProject->id === $project->id,
@@ -104,15 +119,23 @@ class ActivityController extends Controller
             'source' => $source ? [
                 'name' => $source->name,
                 'environment' => $source->environment,
+                'provider' => $source->provider->value,
+                'provider_label' => $source->provider->label(),
                 'ses_region' => $source->ses_region,
                 'ses_configuration_set' => $source->ses_configuration_set,
+                'cloudflare_account_id' => $source->cloudflare_account_id,
                 'default_from_name' => $source->default_from_name,
                 'default_from_email' => $source->default_from_email,
                 'retention_days' => $source->retention_days,
                 'has_aws_credentials' => filled($source->aws_access_key_id) && filled($source->aws_secret_access_key),
                 'has_aws_session_token' => filled($source->aws_session_token),
-                'uses_instance_role' => app()->environment('production') && blank($source->aws_access_key_id) && blank($source->aws_secret_access_key),
+                'has_cloudflare_credentials' => filled($source->cloudflare_api_token),
+                'uses_instance_role' => $source->provider === SourceProvider::Ses
+                    && app()->environment('production')
+                    && blank($source->aws_access_key_id)
+                    && blank($source->aws_secret_access_key),
                 'can_send' => $canSend,
+                'capabilities' => $this->sourceCapabilities($source),
             ] : null,
             'domains' => $project->domains()->latest()->get(['id', 'domain', 'status', 'dns_records', 'verified_at']),
             'templates' => $project->templates()->latest()->get(['slug', 'name', 'subject', 'html', 'text', 'variables', 'updated_at']),
@@ -121,7 +144,9 @@ class ActivityController extends Controller
             'webhookDeliveries' => $this->webhookDeliveries($project),
             'suppressions' => $this->suppressions($project),
             'newWebhookEndpoint' => session('newWebhookEndpoint'),
-            'sesWebhookUrl' => $source ? route('webhooks.ses', $source->webhook_token) : null,
+            'sesWebhookUrl' => $source && $source->provider === SourceProvider::Ses
+                ? route('webhooks.ses', $source->webhook_token)
+                : null,
             'apiKeys' => $project->apiKeys()->latest()->get(['id', 'name', 'prefix', 'scopes', 'last_used_at', 'last_used_ip', 'last_used_user_agent', 'expires_at', 'created_at']),
             'newApiKey' => session('newApiKey'),
             'setup' => $this->setup($project, $source, $context),
@@ -133,6 +158,13 @@ class ActivityController extends Controller
                 'suppressions' => $project->suppressions()->count(),
             ],
             'quota' => $this->quota($project, $source),
+            'system' => [
+                'worker_alive' => $this->systemHealth->workerIsAlive(),
+                'worker_last_seen' => $this->systemHealth->workerHeartbeatAt()?->diffForHumans(),
+                'scheduler_alive' => $this->systemHealth->schedulerIsAlive(),
+                'scheduler_last_seen' => $this->systemHealth->schedulerHeartbeatAt()?->diffForHumans(),
+                'stuck_queued' => $this->systemHealth->stuckQueuedEmailCount($project),
+            ],
         ]);
     }
 
@@ -141,27 +173,44 @@ class ActivityController extends Controller
      */
     private function setup(Project $project, ?Source $source, ProjectContext $context): array
     {
+        $isCloudflare = $source?->provider === SourceProvider::Cloudflare;
         $domain = $project->domains()->latest()->first();
         $hasSendingCredentials = $source && $this->hasSendingCredentials($source);
         $canSend = $source && $this->canSend($project, $source);
-        $webhookUrl = $source ? route('webhooks.ses', $source->webhook_token) : null;
+        $webhookUrl = $source && ! $isCloudflare ? route('webhooks.ses', $source->webhook_token) : null;
         $hasSesEvent = $this->hasSesEvent($project);
         $steps = [
-            [
-                'key' => 'source',
-                'label' => 'Configure SES source',
-                'description' => 'Save the AWS region, default sender, and either IAM access keys or an attached production instance role.',
-                'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
-                'href' => $context->sectionPath($project, 'identities'),
-            ],
-            [
-                'key' => 'domain',
-                'label' => 'Verify sending domain',
-                'description' => 'Create the SES identity and publish the DKIM records shown in Larasend.',
-                'complete' => (bool) ($domain && $domain->status === 'verified'),
-                'href' => $context->sectionPath($project, 'identities'),
-            ],
-            [
+            $isCloudflare
+                ? [
+                    'key' => 'source',
+                    'label' => 'Configure Cloudflare source',
+                    'description' => 'Save the default sender, your Cloudflare account ID, and an API token with Email Sending Edit, Zone Read, and DNS Edit permissions.',
+                    'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
+                    'href' => $context->sectionPath($project, 'identities'),
+                ]
+                : [
+                    'key' => 'source',
+                    'label' => 'Configure SES source',
+                    'description' => 'Save the AWS region, default sender, and either IAM access keys or an attached production instance role.',
+                    'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
+                    'href' => $context->sectionPath($project, 'identities'),
+                ],
+            $isCloudflare
+                ? [
+                    'key' => 'domain',
+                    'label' => 'Verify sending domain',
+                    'description' => 'Add the sending domain and Larasend onboards it for Email Sending in Cloudflare and publishes the DNS records automatically, then re-check DNS. Requires the token to have Zone Read and DNS Edit.',
+                    'complete' => (bool) ($domain && $domain->status === 'verified'),
+                    'href' => $context->sectionPath($project, 'identities'),
+                ]
+                : [
+                    'key' => 'domain',
+                    'label' => 'Verify sending domain',
+                    'description' => 'Create the SES identity and publish the DKIM records shown in Larasend.',
+                    'complete' => (bool) ($domain && $domain->status === 'verified'),
+                    'href' => $context->sectionPath($project, 'identities'),
+                ],
+            ...$isCloudflare ? [] : [[
                 'key' => 'webhook',
                 'label' => 'Connect SES events',
                 'description' => $webhookUrl
@@ -170,7 +219,7 @@ class ActivityController extends Controller
                 'complete' => $hasSesEvent,
                 'href' => $context->sectionPath($project, 'webhooks'),
                 'status' => $hasSesEvent ? 'Events received' : ($webhookUrl ? 'Webhook URL ready' : 'Source missing'),
-            ],
+            ]],
             [
                 'key' => 'api-key',
                 'label' => 'Create an API key',
@@ -191,6 +240,21 @@ class ActivityController extends Controller
             'webhook_url' => $webhookUrl,
             'next_step' => collect($steps)->firstWhere('complete', false),
             'steps' => $steps,
+        ];
+    }
+
+    /**
+     * @return array{identity_creation: bool, inbound_event_webhooks: bool, open_click_tracking: bool, suppression_sync: bool}
+     */
+    private function sourceCapabilities(Source $source): array
+    {
+        $provider = $this->providers->forSource($source);
+
+        return [
+            'identity_creation' => $provider->supportsIdentityCreation(),
+            'inbound_event_webhooks' => $provider->supportsInboundEventWebhooks(),
+            'open_click_tracking' => $provider->supportsOpenClickTracking(),
+            'suppression_sync' => $provider->supportsSuppressionSync(),
         ];
     }
 
@@ -221,7 +285,7 @@ class ActivityController extends Controller
 
     private function hasSendingCredentials(Source $source): bool
     {
-        return filled($source->aws_access_key_id) || app()->environment('production');
+        return $this->providers->forSource($source)->hasSendingCredentials($source);
     }
 
     private function hasVerifiedDomain(Project $project): bool

@@ -11,6 +11,15 @@ use App\Support\ProjectContext;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 
+beforeEach(function (): void {
+    // Domain rechecks dispatched during these tests run inline on the sync
+    // queue; stub the DoH resolvers so no real DNS traffic leaves the suite.
+    Http::fake([
+        'https://cloudflare-dns.com/*' => Http::response(['Status' => 3, 'Answer' => []]),
+        'https://dns.google/*' => Http::response(['Status' => 3, 'Answer' => []]),
+    ]);
+});
+
 /**
  * @return array{0: User, 1: Project}
  */
@@ -282,6 +291,24 @@ it('deletes a domain and clears source linkage', function () {
         ->and($project->sources()->where('domain_id', $domain->id)->exists())->toBeFalse();
 });
 
+it('deletes a domain through the project-scoped route', function () {
+    $user = User::factory()->create();
+    fakeSesIdentityCreation($user);
+
+    $this->actingAs($user)
+        ->post('/domains', ['domain' => 'scoped-delete.example.com'])
+        ->assertRedirect('/identities');
+
+    $project = $user->workspaces()->first()->projects()->first();
+    $domain = $project->domains()->where('domain', 'scoped-delete.example.com')->firstOrFail();
+
+    $this->actingAs($user)
+        ->delete("/projects/{$project->slug}/domains/{$domain->id}")
+        ->assertRedirect("/projects/{$project->slug}/identities");
+
+    expect($project->domains()->where('domain', 'scoped-delete.example.com')->exists())->toBeFalse();
+});
+
 it('prevents users from deleting domains outside their workspace', function () {
     $owner = User::factory()->create();
     $other = User::factory()->create();
@@ -391,8 +418,8 @@ it('syncs ses source quota from aws', function () {
     $source->refresh();
 
     expect($source->last_quota_checked_at)->not->toBeNull()
-        ->and($source->last_quota['Max24HourSend'])->toBe(50000)
-        ->and($source->last_quota['MaxSendRate'])->toBe(200);
+        ->and($source->last_quota['max_24_hour_send'])->toBe(50000)
+        ->and($source->last_quota['max_send_rate'])->toBe(200);
 });
 
 it('can sync ses quota silently for setup automation', function () {
@@ -419,7 +446,7 @@ it('can sync ses quota silently for setup automation', function () {
         ->assertRedirect("/projects/{$project->slug}/setup")
         ->assertSessionMissing('toast');
 
-    expect($source->fresh()->last_quota['Max24HourSend'])->toBe(1000);
+    expect($source->fresh()->last_quota['max_24_hour_send'])->toBe(1000);
 });
 
 it('prevents users from deleting api keys outside their workspace', function () {
