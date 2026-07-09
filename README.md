@@ -306,6 +306,9 @@ Please report security issues privately before opening a public issue.
 
 - Packagist release for the Laravel driver.
 - More provider adapters beyond Amazon SES and Cloudflare Email Service.
+- Cloudflare OAuth as an alternative to pasted API tokens. Deferred because every self-hosted install would first need its own OAuth client registered in the Cloudflare dashboard (redirect URLs are fixed per client), so it adds admin setup before it removes user friction; the token flow needs zero prerequisites.
+- Cloudflare delivery-event polling via the GraphQL Analytics API (late bounces and spam flags after the SMTP accept). Deferred because it needs zone-scoped Analytics Read, per-message ID correlation, and only adds marginal signal — Cloudflare has no open/click tracking either way.
+- CloudFormation quick-create link for one-click SES IAM setup. Deferred because it requires a project-hosted template outside this repository.
 - Deeper per-domain health and deliverability reporting.
 - First-class deploy workflow for updating self-hosted Docker installations.
 - More template authoring and preview tools.
