@@ -250,21 +250,16 @@ php artisan migrate
 npm run dev
 ```
 
-In another terminal, run a queue worker:
-
-```bash
-php artisan queue:work
-```
-
-Or run the bundled development command:
+Or run the bundled development command, which starts the server, queue worker, scheduler, log tail, and Vite together:
 
 ```bash
 composer run dev
 ```
 
-Background automation (DNS verification, quota refresh, Cloudflare suppression sync) also needs the scheduler:
+The queue worker sends the email; the scheduler drives background automation (DNS verification, quota refresh, Cloudflare suppression sync). If you run processes individually instead of using `composer run dev`, start those two yourself:
 
 ```bash
+php artisan queue:work
 php artisan schedule:work
 ```
 
