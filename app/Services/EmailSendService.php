@@ -8,6 +8,7 @@ use App\Models\Email;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Template;
+use App\Services\Providers\EmailProviderFactory;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -19,7 +20,7 @@ class EmailSendService
 {
     public function __construct(
         private MimeMessageBuilder $mimeBuilder,
-        private SesV2Client $sesClient,
+        private EmailProviderFactory $providers,
     ) {}
 
     /**
@@ -110,9 +111,11 @@ class EmailSendService
             ]);
         }
 
-        if (! filled($source->aws_access_key_id) && ! app()->environment('production')) {
+        $provider = $this->providers->forSource($source);
+
+        if (! $provider->hasSendingCredentials($source)) {
             throw ValidationException::withMessages([
-                'send' => 'Connect SES credentials before sending email.',
+                'send' => "Connect {$provider->key()->label()} credentials before sending email.",
             ]);
         }
 
@@ -142,7 +145,7 @@ class EmailSendService
     private function refreshSourceQuota(Source $source): void
     {
         try {
-            $account = $this->sesClient->getAccount($source);
+            $quota = $this->providers->forSource($source)->fetchQuota($source);
         } catch (Throwable $exception) {
             report($exception);
 
@@ -150,7 +153,7 @@ class EmailSendService
         }
 
         $source->forceFill([
-            'last_quota' => $account['SendQuota'] ?? $account,
+            'last_quota' => $quota,
             'last_quota_checked_at' => now(),
         ])->save();
     }

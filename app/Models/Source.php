@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\SourceProvider;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +17,7 @@ class Source extends Model
         'domain_id',
         'name',
         'environment',
+        'provider',
         'ses_region',
         'ses_configuration_set',
         'default_from_name',
@@ -23,6 +25,8 @@ class Source extends Model
         'aws_access_key_id',
         'aws_secret_access_key',
         'aws_session_token',
+        'cloudflare_api_token',
+        'cloudflare_account_id',
         'webhook_token',
         'retention_days',
         'monthly_quota',
@@ -41,15 +45,19 @@ class Source extends Model
         'aws_access_key_id',
         'aws_secret_access_key',
         'aws_session_token',
+        'cloudflare_api_token',
+        'cloudflare_account_id',
         'webhook_token',
     ];
 
     protected function casts(): array
     {
         return [
+            'provider' => SourceProvider::class,
             'aws_access_key_id' => 'encrypted',
             'aws_secret_access_key' => 'encrypted',
             'aws_session_token' => 'encrypted',
+            'cloudflare_api_token' => 'encrypted',
             'last_quota_checked_at' => 'datetime',
             'last_quota' => 'array',
         ];

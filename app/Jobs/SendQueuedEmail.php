@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Events\EmailActivityUpdated;
 use App\Models\Email;
-use App\Services\SesV2Client;
+use App\Services\Providers\EmailProviderFactory;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Storage;
@@ -28,7 +28,7 @@ class SendQueuedEmail implements ShouldQueue
 
     public function __construct(public int $emailId) {}
 
-    public function handle(SesV2Client $sesClient): void
+    public function handle(EmailProviderFactory $providers): void
     {
         $email = Email::query()->with(['source', 'recipients'])->findOrFail($this->emailId);
 
@@ -50,7 +50,7 @@ class SendQueuedEmail implements ShouldQueue
                 throw new \RuntimeException("Stored MIME content is missing for {$email->public_id}.");
             }
 
-            $result = $sesClient->sendRawEmail($email->source, $mime, $this->destination($email));
+            $result = $providers->forSource($email->source)->sendRawEmail($email->source, $mime, $this->envelope($email));
         } catch (Throwable $exception) {
             // Stay in 'sending' so the queue's remaining attempts get past the
             // status guard above; failed() marks it failed after the last one.
@@ -77,17 +77,23 @@ class SendQueuedEmail implements ShouldQueue
     }
 
     /**
-     * @return array{ToAddresses?: array<int, string>, CcAddresses?: array<int, string>, BccAddresses?: array<int, string>}
+     * The typed recipient groups matter: Symfony Mime strips the Bcc header
+     * from the stored message, so every provider must receive recipients out
+     * of band — SES as an explicit Destination, SMTP in the envelope.
+     *
+     * @return array{from: string, recipients: array<int, string>, to: array<int, string>, cc: array<int, string>, bcc: array<int, string>}
      */
-    private function destination(Email $email): array
+    private function envelope(Email $email): array
     {
         $grouped = $email->recipients->groupBy('type');
 
-        return array_filter([
-            'ToAddresses' => $grouped->get('to', collect())->pluck('email')->all(),
-            'CcAddresses' => $grouped->get('cc', collect())->pluck('email')->all(),
-            'BccAddresses' => $grouped->get('bcc', collect())->pluck('email')->all(),
-        ]);
+        return [
+            'from' => $email->from_email,
+            'recipients' => $email->recipients->pluck('email')->all(),
+            'to' => $grouped->get('to', collect())->pluck('email')->all(),
+            'cc' => $grouped->get('cc', collect())->pluck('email')->all(),
+            'bcc' => $grouped->get('bcc', collect())->pluck('email')->all(),
+        ];
     }
 
     public function failed(Throwable $exception): void

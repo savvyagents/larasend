@@ -4,3 +4,6 @@ services:
 
   queue:
     build: .
+
+  scheduler:
+    build: .

@@ -20,7 +20,14 @@ import {
     Trash2,
     X,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import {
+    computed,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref,
+    watch,
+} from 'vue';
 import AppLogoIcon from '@/components/AppLogoIcon.vue';
 import { getInitials } from '@/composables/useInitials';
 
@@ -117,7 +124,8 @@ type ProjectOption = {
     name: string;
     slug: string;
     environment: string;
-    region: string;
+    provider_label: string;
+    region: string | null;
     emails_count: number;
     domains_count: number;
     is_current: boolean;
@@ -126,9 +134,15 @@ type ProjectOption = {
     delete_block_reason: string | null;
 };
 
+type SourceProvider = 'ses' | 'cloudflare';
+
 type ArchivedProjectOption = Omit<
     ProjectOption,
-    'is_current' | 'href' | 'can_delete' | 'delete_block_reason'
+    | 'is_current'
+    | 'href'
+    | 'can_delete'
+    | 'delete_block_reason'
+    | 'provider_label'
 > & {
     archived_at: string | null;
 };
@@ -165,7 +179,9 @@ const props = defineProps<{
         name: string;
         slug: string;
         environment: string;
-        region: string;
+        provider: SourceProvider;
+        provider_label: string;
+        region: string | null;
         path: string;
         exportPath: string;
     };
@@ -201,18 +217,35 @@ const props = defineProps<{
         sentLast24Hours: number | null;
         checkedAt: string | null;
     };
+    system: {
+        worker_alive: boolean;
+        worker_last_seen: string | null;
+        scheduler_alive: boolean;
+        scheduler_last_seen: string | null;
+        stuck_queued: number;
+    };
     source: {
         name: string;
         environment: string;
-        ses_region: string;
+        provider: SourceProvider;
+        provider_label: string;
+        ses_region: string | null;
         ses_configuration_set: string | null;
+        cloudflare_account_id: string | null;
         default_from_name: string | null;
         default_from_email: string | null;
         retention_days: number;
         has_aws_credentials: boolean;
         has_aws_session_token: boolean;
+        has_cloudflare_credentials: boolean;
         uses_instance_role: boolean;
         can_send: boolean;
+        capabilities: {
+            identity_creation: boolean;
+            inbound_event_webhooks: boolean;
+            open_click_tracking: boolean;
+            suppression_sync: boolean;
+        };
     } | null;
     domains: {
         id: number;
@@ -272,7 +305,9 @@ const props = defineProps<{
 }>();
 
 const page = usePage();
-const userInitials = computed(() => getInitials(page.props.auth.user?.name) || 'U');
+const userInitials = computed(
+    () => getInitials(page.props.auth.user?.name) || 'U',
+);
 const buildLabel = computed(() => {
     const build = page.props.build as
         | { version?: string | null; sha?: string | null }
@@ -333,8 +368,11 @@ let resizeStartWidth = 0;
 const sourceForm = reactive({
     name: props.source?.name ?? 'Production',
     environment: props.source?.environment ?? props.project.environment,
-    ses_region: props.source?.ses_region ?? props.project.region,
+    provider: (props.source?.provider ?? 'ses') as SourceProvider,
+    ses_region: props.source?.ses_region ?? props.project.region ?? 'us-east-1',
     ses_configuration_set: props.source?.ses_configuration_set ?? '',
+    cloudflare_account_id: props.source?.cloudflare_account_id ?? '',
+    cloudflare_api_token: '',
     default_from_name: props.source?.default_from_name ?? 'Larasend',
     default_from_email: props.source?.default_from_email ?? '',
     aws_access_key_id: '',
@@ -547,12 +585,36 @@ const templateStats = computed(() => [
 
 const quotaPercent = computed(() =>
     props.quota.limit
-        ? Math.min(100, Math.round((props.quota.sent / props.quota.limit) * 100))
+        ? Math.min(
+              100,
+              Math.round((props.quota.sent / props.quota.limit) * 100),
+          )
         : 0,
 );
 const hasProviderQuota = computed(() => Boolean(props.quota.limit));
+const isCloudflare = computed(() => props.source?.provider === 'cloudflare');
+const providerLabel = computed(
+    () => props.source?.provider_label ?? 'Amazon SES',
+);
+const cloudflareTokenUrl = computed(() => {
+    // Email Sending Edit to send, Zone Read + DNS Edit so Larasend can
+    // onboard sending domains and publish their records automatically.
+    const permissions = encodeURIComponent(
+        JSON.stringify([
+            { key: 'email_sending', type: 'edit' },
+            { key: 'zone', type: 'read' },
+            { key: 'dns', type: 'edit' },
+        ]),
+    );
+
+    return `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${permissions}&name=Larasend%20Email%20Sending`;
+});
 const quotaTitle = computed(() =>
-    hasProviderQuota.value ? 'SES 24h quota' : 'Stored sends',
+    hasProviderQuota.value
+        ? isCloudflare.value
+            ? 'Cloudflare daily quota'
+            : 'SES 24h quota'
+        : 'Stored sends',
 );
 const quotaStatus = computed(() => {
     if (!props.source) {
@@ -606,6 +668,12 @@ const credentialMode = computed(() => {
         return 'Not configured';
     }
 
+    if (props.source.provider === 'cloudflare') {
+        return props.source.has_cloudflare_credentials
+            ? 'Cloudflare API token'
+            : 'Missing API token';
+    }
+
     if (props.source.uses_instance_role) {
         return 'EC2 instance role';
     }
@@ -618,6 +686,14 @@ const credentialMode = computed(() => {
 
     return 'Missing credentials';
 });
+const hasCredentials = computed(() =>
+    isCloudflare.value
+        ? Boolean(props.source?.has_cloudflare_credentials)
+        : Boolean(
+              props.source?.has_aws_credentials ||
+              props.source?.uses_instance_role,
+          ),
+);
 const setupWebhookStep = computed(() =>
     props.setup.steps.find((step) => step.key === 'webhook'),
 );
@@ -630,23 +706,20 @@ const setupHealthCards = computed<
         meta: props.source?.default_from_email
             ? props.source.default_from_email
             : 'Default sender missing',
-        tone:
-            props.source?.has_aws_credentials || props.source?.uses_instance_role
-                ? 'success'
-                : 'warning',
+        tone: hasCredentials.value ? 'success' : 'warning',
     },
     {
         label: 'Domain',
         value: verifiedDomain.value?.domain ?? 'Not verified',
         meta: verifiedDomain.value
-            ? `${props.project.region} verified`
+            ? `${props.project.region ?? providerLabel.value} verified`
             : `${props.domains.length.toLocaleString()} configured`,
         tone: verifiedDomain.value ? 'success' : 'warning',
     },
     {
         label: 'Quota',
         value: props.quota.limit
-            ? `${props.quota.limit.toLocaleString()} / 24h`
+            ? `${props.quota.limit.toLocaleString()} / ${isCloudflare.value ? 'day' : '24h'}`
             : syncingQuota.value
               ? 'Syncing'
               : 'Needs sync',
@@ -655,22 +728,29 @@ const setupHealthCards = computed<
             : quotaStatus.value,
         tone: props.quota.limit ? 'success' : 'warning',
     },
-    {
-        label: 'Events',
-        value: setupWebhookStep.value?.complete
-            ? 'Events received'
-            : props.sesWebhookUrl
-              ? 'Webhook URL ready'
-              : 'Source missing',
-        meta: activeWebhookCount.value
-            ? `${activeWebhookCount.value.toLocaleString()} outbound active`
-            : (setupWebhookStep.value?.status ?? 'Waiting for SES event'),
-        tone: setupWebhookStep.value?.complete
-            ? 'success'
-            : props.sesWebhookUrl
-              ? 'warning'
-              : 'neutral',
-    },
+    isCloudflare.value
+        ? {
+              label: 'Events',
+              value: 'Suppression sync',
+              meta: 'Cloudflare has no event webhooks; suppressions sync hourly',
+              tone: 'neutral' as HealthTone,
+          }
+        : {
+              label: 'Events',
+              value: setupWebhookStep.value?.complete
+                  ? 'Events received'
+                  : props.sesWebhookUrl
+                    ? 'Webhook URL ready'
+                    : 'Source missing',
+              meta: activeWebhookCount.value
+                  ? `${activeWebhookCount.value.toLocaleString()} outbound active`
+                  : (setupWebhookStep.value?.status ?? 'Waiting for SES event'),
+              tone: setupWebhookStep.value?.complete
+                  ? 'success'
+                  : props.sesWebhookUrl
+                    ? 'warning'
+                    : 'neutral',
+          },
     {
         label: 'API keys',
         value: props.apiKeys.length
@@ -681,9 +761,32 @@ const setupHealthCards = computed<
             : 'No usage yet',
         tone: props.apiKeys.length ? 'success' : 'neutral',
     },
+    {
+        label: 'Queue worker',
+        value: props.system.worker_alive ? 'Running' : 'Not detected',
+        meta: props.system.worker_alive
+            ? `last seen ${props.system.worker_last_seen}`
+            : 'Emails will not send. Run: php artisan queue:work',
+        tone: props.system.worker_alive ? 'success' : 'warning',
+    },
+    {
+        label: 'Scheduler',
+        value: props.system.scheduler_alive ? 'Running' : 'Not detected',
+        meta: props.system.scheduler_alive
+            ? `last ran ${props.system.scheduler_last_seen}`
+            : 'DNS checks, quota, and suppressions will not refresh',
+        tone: props.system.scheduler_alive ? 'success' : 'warning',
+    },
 ]);
-const complaintRate = computed(() =>
-    `${((complaintRows.value.length / Math.max(props.emails.length, 1)) * 100).toFixed(3)}%`,
+const showWorkerBanner = computed(
+    () =>
+        !props.system.worker_alive &&
+        props.system.stuck_queued > 0 &&
+        (isMailSection.value || props.section === 'send'),
+);
+const complaintRate = computed(
+    () =>
+        `${((complaintRows.value.length / Math.max(props.emails.length, 1)) * 100).toFixed(3)}%`,
 );
 const projectBasePath = computed(() => `/projects/${props.project.slug}`);
 const sectionPath = computed(() => sectionHref(props.section));
@@ -838,6 +941,21 @@ usePoll(
     { autoStart: isMailSection.value },
 );
 
+const hasPendingDomainCheck = computed(
+    () =>
+        props.section === 'identities' &&
+        props.domains.some((domain) => domain.status === 'pending'),
+);
+
+// A background job re-checks pending domains every 10 minutes regardless of
+// whether anyone has this page open; this just reflects that result without
+// requiring a manual "Re-check DNS" click.
+usePoll(
+    10 * 60 * 1000,
+    { only: ['domains', 'setup'], showProgress: false },
+    { autoStart: hasPendingDomainCheck.value },
+);
+
 watch(
     () => props.emails,
     (emails) => {
@@ -847,7 +965,9 @@ watch(
             return;
         }
 
-        const refreshed = emails.find((email) => email.id === selected.value?.id);
+        const refreshed = emails.find(
+            (email) => email.id === selected.value?.id,
+        );
 
         if (refreshed) {
             selected.value = {
@@ -871,7 +991,9 @@ watch(searchQuery, () => {
 });
 
 onMounted(() => {
-    const savedWidth = Number(window.localStorage.getItem('larasend:inspectorWidth'));
+    const savedWidth = Number(
+        window.localStorage.getItem('larasend:inspectorWidth'),
+    );
 
     if (Number.isFinite(savedWidth)) {
         inspectorWidth.value = clampInspectorWidth(savedWidth);
@@ -1026,7 +1148,7 @@ function deleteDomain(): void {
 
     openConfirmation({
         title: `Delete ${domain.domain}?`,
-        body: 'This removes the identity from Larasend only. SES identities and DNS records are not removed from AWS or your DNS provider.',
+        body: `This removes the identity from Larasend only. ${providerLabel.value} identities and DNS records are not removed from the provider or your DNS host.`,
         actionLabel: 'Delete identity',
         tone: 'danger',
         onConfirm: () => {
@@ -1143,7 +1265,9 @@ function issueApiKey(): void {
 
 function toggleApiKeyScope(scope: ApiKeyScope): void {
     if (apiKeyForm.scopes.includes(scope)) {
-        apiKeyForm.scopes = apiKeyForm.scopes.filter((value) => value !== scope);
+        apiKeyForm.scopes = apiKeyForm.scopes.filter(
+            (value) => value !== scope,
+        );
 
         return;
     }
@@ -1276,7 +1400,13 @@ function resendEmail(): void {
             preserveScroll: true,
             onSuccess: () => {
                 router.reload({
-                    only: ['emails', 'selectedEmail', 'metrics', 'sidebarCounts', 'quota'],
+                    only: [
+                        'emails',
+                        'selectedEmail',
+                        'metrics',
+                        'sidebarCounts',
+                        'quota',
+                    ],
                     showProgress: false,
                 });
             },
@@ -1405,10 +1535,7 @@ function updateWorkspaceMemberRole(
     );
 }
 
-function handleWorkspaceMemberRoleChange(
-    memberId: number,
-    event: Event,
-): void {
+function handleWorkspaceMemberRoleChange(memberId: number, event: Event): void {
     const target = event.target;
 
     if (target instanceof HTMLSelectElement) {
@@ -1687,7 +1814,9 @@ function formatHeaders(email: Partial<EmailDetail>): string {
     }
 
     if (email.sesMessageId) {
-        standardHeaders['X-SES-Message-ID'] = email.sesMessageId;
+        standardHeaders[
+            isCloudflare.value ? 'X-Provider-Message-ID' : 'X-SES-Message-ID'
+        ] = email.sesMessageId;
     }
 
     const headers = {
@@ -1803,7 +1932,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         class="mt-0.5 block truncate font-mono text-[11px] text-zinc-500"
                                         >{{ item.slug }} ·
                                         {{ item.environment }} ·
-                                        {{ item.region }}</span
+                                        {{
+                                            item.region ?? item.provider_label
+                                        }}</span
                                     >
                                 </span>
                                 <span
@@ -1976,7 +2107,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                             type="button"
                             class="inline-flex items-center gap-1 font-mono text-zinc-900 transition hover:text-teal-600 disabled:cursor-wait disabled:opacity-60 dark:text-zinc-100 dark:hover:text-teal-300"
                             :disabled="syncingQuota"
-                            title="Sync SES sending quota from the configured source"
+                            title="Sync provider sending quota from the configured source"
                             @click="syncQuota()"
                         >
                             <RefreshCw
@@ -2009,6 +2140,34 @@ function recipientTitle(email: EmailRow): string | undefined {
             <main
                 class="row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden"
             >
+                <div
+                    v-if="showWorkerBanner"
+                    class="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-300 bg-amber-50 px-3.5 py-2 font-sans text-[12.5px] text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100"
+                >
+                    <AlertTriangle class="size-4 shrink-0" />
+                    <span class="font-semibold">
+                        {{ system.stuck_queued }}
+                        {{
+                            system.stuck_queued === 1
+                                ? 'email is'
+                                : 'emails are'
+                        }}
+                        stuck in the queue and no queue worker is running.
+                    </span>
+                    <span>
+                        Start one with
+                        <code
+                            class="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11.5px] dark:bg-amber-500/20"
+                            >php artisan queue:work</code
+                        >
+                        (or
+                        <code
+                            class="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11.5px] dark:bg-amber-500/20"
+                            >composer run dev</code
+                        >
+                        locally).
+                    </span>
+                </div>
                 <section
                     class="flex h-11 shrink-0 items-center gap-2.5 border-b border-zinc-200 px-3.5 dark:border-[#1d2125]"
                 >
@@ -2316,12 +2475,15 @@ function recipientTitle(email: EmailRow): string | undefined {
                             <div
                                 class="font-medium text-zinc-950 dark:text-zinc-100"
                             >
-                                Monitor complaint feedback loops before AWS
+                                Monitor complaint feedback loops before sender
                                 reputation is affected.
                             </div>
                             <div class="text-zinc-500 dark:text-[#9aa0a6]">
-                                Complaint events create suppressions as SES
-                                webhook events arrive.
+                                {{
+                                    isCloudflare
+                                        ? 'Suppressions sync hourly from the Cloudflare account-level list.'
+                                        : 'Complaint events create suppressions as SES webhook events arrive.'
+                                }}
                             </div>
                         </div>
                         <Link
@@ -2357,7 +2519,10 @@ function recipientTitle(email: EmailRow): string | undefined {
                             class="grid min-h-11 grid-cols-[minmax(260px,1fr)_120px_minmax(220px,1fr)_120px] items-center gap-3 border-b border-zinc-100 px-3.5 py-2 text-[12.5px] last:border-b-0 dark:border-[#16191c]"
                         >
                             <div class="truncate font-medium">
-                                {{ email.recipientEmails || email.recipientEmail }}
+                                {{
+                                    email.recipientEmails ||
+                                    email.recipientEmail
+                                }}
                             </div>
                             <div>
                                 <span
@@ -2789,9 +2954,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                             class="flex max-w-6xl items-start justify-between gap-4"
                         >
                             <div>
-                                <h2 class="text-lg font-semibold">
-                                    Workspace
-                                </h2>
+                                <h2 class="text-lg font-semibold">Workspace</h2>
                                 <p class="mt-1 max-w-2xl text-sm text-zinc-500">
                                     Manage project boundaries and workspace
                                     access. Projects isolate domains, sources,
@@ -2917,7 +3080,10 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             {{ item.environment }}
                                         </div>
                                         <div class="font-mono text-zinc-500">
-                                            {{ item.region }}
+                                            {{
+                                                item.region ??
+                                                item.provider_label
+                                            }}
                                         </div>
                                         <div class="text-right font-mono">
                                             {{
@@ -3027,12 +3193,12 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         Archived projects
                                         <span
                                             class="ml-1 font-mono text-xs text-zinc-500"
-                                            >{{
-                                                archivedProjects.length
-                                            }}</span
+                                            >{{ archivedProjects.length }}</span
                                         >
                                     </span>
-                                    <span class="font-mono text-xs text-zinc-500">
+                                    <span
+                                        class="font-mono text-xs text-zinc-500"
+                                    >
                                         {{
                                             showingArchivedProjects
                                                 ? 'hide'
@@ -3058,7 +3224,8 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             >
                                                 {{ item.slug }} · archived
                                                 {{
-                                                    item.archived_at || 'recently'
+                                                    item.archived_at ||
+                                                    'recently'
                                                 }}
                                             </div>
                                         </div>
@@ -3066,7 +3233,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             {{ item.environment }}
                                         </div>
                                         <div class="font-mono text-zinc-500">
-                                            {{ item.region }}
+                                            {{ item.region ?? '—' }}
                                         </div>
                                         <div class="text-right font-mono">
                                             {{
@@ -3111,7 +3278,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     <h2 class="text-lg font-semibold">
                                         Workspace members
                                     </h2>
-                                    <p class="mt-1 max-w-2xl text-sm text-zinc-500">
+                                    <p
+                                        class="mt-1 max-w-2xl text-sm text-zinc-500"
+                                    >
                                         Members can access every project in
                                         {{ workspace.name }}.
                                     </p>
@@ -3137,9 +3306,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         placeholder="teammate@example.com"
                                     />
                                     <p
-                                        v-if="
-                                            workspaceMemberForm.errors.email
-                                        "
+                                        v-if="workspaceMemberForm.errors.email"
                                         class="mt-1 text-xs text-red-500"
                                     >
                                         {{ workspaceMemberForm.errors.email }}
@@ -3272,7 +3439,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                             v-if="setup.next_step"
                             class="max-w-5xl rounded-lg border border-teal-200 bg-teal-50 p-4 font-sans text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
                         >
-                            <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div
+                                class="flex flex-wrap items-center justify-between gap-3"
+                            >
                                 <div>
                                     <div
                                         class="font-mono text-[10px] tracking-widest text-teal-700 uppercase dark:text-teal-300"
@@ -3282,7 +3451,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     <h2 class="mt-1 text-lg font-semibold">
                                         {{ setup.next_step.label }}
                                     </h2>
-                                    <p class="mt-1 max-w-3xl text-sm opacity-80">
+                                    <p
+                                        class="mt-1 max-w-3xl text-sm opacity-80"
+                                    >
                                         {{ setup.next_step.description }}
                                     </p>
                                 </div>
@@ -3381,7 +3552,11 @@ function recipientTitle(email: EmailRow): string | undefined {
                             <div class="flex items-start justify-between gap-4">
                                 <div>
                                     <h2 class="text-lg font-semibold">
-                                        AWS wiring
+                                        {{
+                                            isCloudflare
+                                                ? 'Cloudflare wiring'
+                                                : 'AWS wiring'
+                                        }}
                                     </h2>
                                     <p class="mt-1 text-sm text-zinc-500">
                                         {{ quotaStatus }}
@@ -3391,12 +3566,14 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     type="button"
                                     class="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-600 transition hover:text-zinc-950 disabled:cursor-wait disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
                                     :disabled="syncingQuota"
-                                    title="Sync SES sending quota"
+                                    title="Sync provider sending quota"
                                     @click="syncQuota()"
                                 >
                                     <RefreshCw
                                         class="size-4"
-                                        :class="{ 'animate-spin': syncingQuota }"
+                                        :class="{
+                                            'animate-spin': syncingQuota,
+                                        }"
                                     />
                                     {{
                                         syncingQuota
@@ -3417,7 +3594,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                                                 Source
                                             </div>
                                             <div class="mt-1 font-semibold">
-                                                {{ source?.name || 'Production' }}
+                                                {{
+                                                    source?.name || 'Production'
+                                                }}
                                             </div>
                                         </div>
                                         <div>
@@ -3436,7 +3615,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             >
                                                 Default sender
                                             </div>
-                                            <div class="mt-1 truncate font-semibold">
+                                            <div
+                                                class="mt-1 truncate font-semibold"
+                                            >
                                                 {{
                                                     source?.default_from_email ||
                                                     'Missing'
@@ -3447,13 +3628,19 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             <div
                                                 class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
                                             >
-                                                SES events
+                                                {{
+                                                    isCloudflare
+                                                        ? 'Events'
+                                                        : 'SES events'
+                                                }}
                                             </div>
                                             <div class="mt-1 font-semibold">
                                                 {{
-                                                    setup.webhook_url
-                                                        ? 'Webhook ready'
-                                                        : 'Not configured'
+                                                    isCloudflare
+                                                        ? 'Suppression sync'
+                                                        : setup.webhook_url
+                                                          ? 'Webhook ready'
+                                                          : 'Not configured'
                                                 }}
                                             </div>
                                         </div>
@@ -3469,40 +3656,85 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         </div>
                                     </div>
                                 </div>
-                                <div>
-                                    1. Deploy the app with `APP_URL`, database,
-                                    queue worker, and HTTPS configured.
-                                </div>
-                                <div>
-                                    2. Create an IAM user or role with SES
-                                    permissions for `ses:SendRawEmail`,
-                                    `ses:CreateEmailIdentity`,
-                                    `ses:GetEmailIdentity`, `ses:GetSendQuota`,
-                                    and `ses:GetAccount`.
-                                </div>
-                                <div>
-                                    3. Save the SES source in Larasend, add your
-                                    sending domain, then publish the DKIM
-                                    records in Route 53 or your DNS provider.
-                                </div>
-                                <div>
-                                    4. Configure SES event publishing through
-                                    SNS to this webhook URL:
-                                </div>
-                                <div
-                                    class="overflow-auto rounded-md bg-zinc-100 p-3 font-mono text-xs text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
-                                >
-                                    {{
-                                        setup.webhook_url ||
-                                        'Save a source first'
-                                    }}
-                                </div>
-                                <div>
-                                    5. Create an API key and set
-                                    `MAIL_MAILER=larasend`, `LARASEND_API_KEY`,
-                                    and `LARASEND_ENDPOINT` in the Laravel app
-                                    that sends mail.
-                                </div>
+                                <template v-if="isCloudflare">
+                                    <div>
+                                        1. Deploy the app with `APP_URL`,
+                                        database, queue worker, scheduler, and
+                                        HTTPS configured.
+                                    </div>
+                                    <div>
+                                        2. Enable the Workers Paid plan on the
+                                        Cloudflare account and make sure the
+                                        sending domain uses Cloudflare DNS.
+                                    </div>
+                                    <div>
+                                        3.
+                                        <a
+                                            :href="cloudflareTokenUrl"
+                                            target="_blank"
+                                            rel="noopener"
+                                            class="font-semibold text-zinc-950 underline dark:text-zinc-100"
+                                            >Create an API token</a
+                                        >
+                                        with Email Sending Edit, Zone Read, and
+                                        DNS Edit, then save it with your account
+                                        ID in the source settings. Add the
+                                        sending domain in Larasend and it is
+                                        onboarded in Cloudflare automatically.
+                                    </div>
+                                    <div>
+                                        4. Delivery events are limited to SMTP
+                                        accept/reject at send time; Cloudflare
+                                        suppressions sync into Larasend hourly.
+                                    </div>
+                                    <div>
+                                        5. Create an API key and set
+                                        `MAIL_MAILER=larasend`,
+                                        `LARASEND_API_KEY`, and
+                                        `LARASEND_ENDPOINT` in the Laravel app
+                                        that sends mail.
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    <div>
+                                        1. Deploy the app with `APP_URL`,
+                                        database, queue worker, and HTTPS
+                                        configured.
+                                    </div>
+                                    <div>
+                                        2. Create an IAM user or role with SES
+                                        permissions for `ses:SendRawEmail`,
+                                        `ses:CreateEmailIdentity`,
+                                        `ses:GetEmailIdentity`,
+                                        `ses:GetSendQuota`, and
+                                        `ses:GetAccount`.
+                                    </div>
+                                    <div>
+                                        3. Save the SES source in Larasend, add
+                                        your sending domain, then publish the
+                                        DKIM records in Route 53 or your DNS
+                                        provider.
+                                    </div>
+                                    <div>
+                                        4. Configure SES event publishing
+                                        through SNS to this webhook URL:
+                                    </div>
+                                    <div
+                                        class="overflow-auto rounded-md bg-zinc-100 p-3 font-mono text-xs text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            setup.webhook_url ||
+                                            'Save a source first'
+                                        }}
+                                    </div>
+                                    <div>
+                                        5. Create an API key and set
+                                        `MAIL_MAILER=larasend`,
+                                        `LARASEND_API_KEY`, and
+                                        `LARASEND_ENDPOINT` in the Laravel app
+                                        that sends mail.
+                                    </div>
+                                </template>
                             </div>
                         </div>
                     </div>
@@ -3516,13 +3748,13 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 <AlertTriangle class="mt-0.5 size-5" />
                                 <div>
                                     <h2 class="text-base font-semibold">
-                                        SES setup required
+                                        {{ providerLabel }} setup required
                                     </h2>
                                     <p class="mt-1 text-sm">
-                                        Add AWS SES credentials and verify a
-                                        sending domain before sending email.
-                                        Larasend will not record local send
-                                        events as successful deliveries.
+                                        Add {{ providerLabel }} credentials and
+                                        verify a sending domain before sending
+                                        email. Larasend will not record local
+                                        send events as successful deliveries.
                                     </p>
                                 </div>
                             </div>
@@ -3544,7 +3776,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </h2>
                                 <p class="mt-1 text-sm text-zinc-500">
                                     Uses the configured project source and sends
-                                    through AWS SES.
+                                    through {{ providerLabel }}.
                                 </p>
                             </div>
                             <div class="grid grid-cols-2 gap-4">
@@ -3653,7 +3885,10 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </button>
                             </div>
                             <form
-                                v-if="showNewIdentity && workspace.can_manage_domains"
+                                v-if="
+                                    showNewIdentity &&
+                                    workspace.can_manage_domains
+                                "
                                 class="grid gap-3 border-b border-zinc-200 p-4 font-sans dark:border-zinc-800"
                                 @submit.prevent="addDomain"
                             >
@@ -3704,8 +3939,11 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     >
                                 </div>
                                 <div class="mt-2 text-sm text-zinc-500">
-                                    {{ project.region }} ·
-                                    {{ quota.sent.toLocaleString() }} sent · 30d
+                                    {{
+                                        project.region ?? project.provider_label
+                                    }}
+                                    · {{ quota.sent.toLocaleString() }} sent ·
+                                    30d
                                 </div>
                                 <div class="mt-3 flex gap-2">
                                     <span
@@ -3756,8 +3994,12 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     <div
                                         class="mt-2 font-mono text-sm text-zinc-500"
                                     >
-                                        {{ project.region }} · Amazon SES ·
-                                        verified
+                                        {{
+                                            project.region
+                                                ? `${project.region} · ${project.provider_label}`
+                                                : project.provider_label
+                                        }}
+                                        · verified
                                         {{
                                             selectedIdentity.verified_at ||
                                             'pending DNS'
@@ -3889,9 +4131,9 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         >
                                             {{
                                                 label === 'DKIM'
-                                                    ? 'SES DKIM selectors are present and aligned.'
+                                                    ? `${providerLabel} DKIM selectors are present and aligned.`
                                                     : label === 'SPF'
-                                                      ? 'TXT record authorizes Amazon SES as a sending source.'
+                                                      ? `TXT record authorizes ${providerLabel} as a sending source.`
                                                       : 'Policy record is present for domain alignment.'
                                             }}
                                         </p>
@@ -4034,7 +4276,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                             >
                                 <div class="flex items-center justify-between">
                                     <h3 class="font-semibold">
-                                        SES source settings
+                                        Source settings
                                     </h3>
                                     <button
                                         class="text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-100"
@@ -4086,6 +4328,30 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             </label>
                                             <label class="grid gap-2 text-sm">
                                                 <span class="text-zinc-500"
+                                                    >Provider</span
+                                                >
+                                                <select
+                                                    v-model="
+                                                        sourceForm.provider
+                                                    "
+                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
+                                                >
+                                                    <option value="ses">
+                                                        Amazon SES
+                                                    </option>
+                                                    <option value="cloudflare">
+                                                        Cloudflare Email Service
+                                                    </option>
+                                                </select>
+                                            </label>
+                                            <label
+                                                v-if="
+                                                    sourceForm.provider ===
+                                                    'ses'
+                                                "
+                                                class="grid gap-2 text-sm"
+                                            >
+                                                <span class="text-zinc-500"
                                                     >SES region</span
                                                 >
                                                 <input
@@ -4118,7 +4384,13 @@ function recipientTitle(email: EmailRow): string | undefined {
                                                     required
                                                 />
                                             </label>
-                                            <label class="grid gap-2 text-sm">
+                                            <label
+                                                v-if="
+                                                    sourceForm.provider ===
+                                                    'ses'
+                                                "
+                                                class="grid gap-2 text-sm"
+                                            >
                                                 <span class="text-zinc-500"
                                                     >SES configuration set</span
                                                 >
@@ -4139,6 +4411,68 @@ function recipientTitle(email: EmailRow): string | undefined {
                                             Credentials
                                         </div>
                                         <div
+                                            v-if="
+                                                sourceForm.provider ===
+                                                'cloudflare'
+                                            "
+                                            class="grid gap-4"
+                                        >
+                                            <div
+                                                class="grid gap-4 md:grid-cols-2"
+                                            >
+                                                <label
+                                                    class="grid gap-2 text-sm"
+                                                >
+                                                    <span class="text-zinc-500"
+                                                        >Cloudflare account
+                                                        ID</span
+                                                    >
+                                                    <input
+                                                        v-model="
+                                                            sourceForm.cloudflare_account_id
+                                                        "
+                                                        autocomplete="off"
+                                                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
+                                                        placeholder="From the Cloudflare dashboard URL"
+                                                    />
+                                                </label>
+                                                <label
+                                                    class="grid gap-2 text-sm"
+                                                >
+                                                    <span class="text-zinc-500"
+                                                        >Cloudflare API
+                                                        token</span
+                                                    >
+                                                    <input
+                                                        v-model="
+                                                            sourceForm.cloudflare_api_token
+                                                        "
+                                                        type="password"
+                                                        autocomplete="new-password"
+                                                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
+                                                        placeholder="Leave blank to keep saved value"
+                                                    />
+                                                </label>
+                                            </div>
+                                            <p class="text-sm text-zinc-500">
+                                                <a
+                                                    :href="cloudflareTokenUrl"
+                                                    target="_blank"
+                                                    rel="noopener"
+                                                    class="font-semibold text-zinc-950 underline dark:text-zinc-100"
+                                                    >Create a token in
+                                                    Cloudflare</a
+                                                >
+                                                with Email Sending Edit, Zone
+                                                Read, and DNS Edit pre-selected
+                                                — Larasend uses these to onboard
+                                                sending domains automatically.
+                                                If a permission does not appear,
+                                                search for it in the token form.
+                                            </p>
+                                        </div>
+                                        <div
+                                            v-else
                                             class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
                                         >
                                             <label class="grid gap-2 text-sm">
@@ -4149,7 +4483,8 @@ function recipientTitle(email: EmailRow): string | undefined {
                                                             source?.uses_instance_role
                                                         "
                                                         class="font-normal"
-                                                        >(optional override)</span
+                                                        >(optional
+                                                        override)</span
                                                     ></span
                                                 >
                                                 <input
@@ -4169,7 +4504,8 @@ function recipientTitle(email: EmailRow): string | undefined {
                                                             source?.uses_instance_role
                                                         "
                                                         class="font-normal"
-                                                        >(optional override)</span
+                                                        >(optional
+                                                        override)</span
                                                     ></span
                                                 >
                                                 <input
@@ -4198,12 +4534,15 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         </div>
                                     </div>
                                     <div
+                                        v-if="sourceForm.provider === 'ses'"
                                         class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
                                     >
                                         <div class="font-semibold">
                                             SES events
                                         </div>
-                                        <div class="font-mono text-xs text-zinc-500">
+                                        <div
+                                            class="font-mono text-xs text-zinc-500"
+                                        >
                                             {{
                                                 setup.webhook_url ||
                                                 'Save a source first'
@@ -4211,11 +4550,23 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         </div>
                                     </div>
                                     <div
+                                        v-else
+                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
+                                    >
+                                        <div class="font-semibold">Events</div>
+                                        <div class="text-zinc-500">
+                                            Cloudflare has no event webhooks.
+                                            Delivery state is recorded at send
+                                            time and suppressions sync hourly.
+                                        </div>
+                                    </div>
+                                    <div
                                         class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
                                     >
                                         <div class="font-semibold">Quota</div>
                                         <div class="text-zinc-500">
-                                            {{ quotaDetail }} · {{ quotaStatus }}
+                                            {{ quotaDetail }} ·
+                                            {{ quotaStatus }}
                                         </div>
                                     </div>
                                     <button
@@ -4774,9 +5125,12 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     <div class="font-semibold">
                                         Keys are only shown once at creation.
                                     </div>
-                                    <div class="mt-0.5 text-[12px] text-zinc-500">
-                                        Pick scopes, optional expiration, then copy
-                                        the full token from the reveal dialog.
+                                    <div
+                                        class="mt-0.5 text-[12px] text-zinc-500"
+                                    >
+                                        Pick scopes, optional expiration, then
+                                        copy the full token from the reveal
+                                        dialog.
                                     </div>
                                 </div>
                                 <button
@@ -4909,7 +5263,10 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         {{ apiKey.last_used_ip || '—' }}
                                     </div>
                                     <div class="truncate text-[10px]">
-                                        {{ apiKey.last_used_user_agent || 'no app' }}
+                                        {{
+                                            apiKey.last_used_user_agent ||
+                                            'no app'
+                                        }}
                                     </div>
                                 </div>
                                 <div
@@ -4981,9 +5338,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     Bounces
                                 </div>
                                 <div class="mt-3 text-xl font-semibold">
-                                    {{
-                                        bounceSuppressionCount
-                                    }}
+                                    {{ bounceSuppressionCount }}
                                 </div>
                                 <div
                                     class="mt-1 font-mono text-[12px] text-red-400"
@@ -5000,9 +5355,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     Complaints
                                 </div>
                                 <div class="mt-3 text-xl font-semibold">
-                                    {{
-                                        complaintSuppressionCount
-                                    }}
+                                    {{ complaintSuppressionCount }}
                                 </div>
                                 <div
                                     class="mt-1 font-mono text-[12px] text-violet-400"

@@ -8,6 +8,7 @@ use App\Models\Source;
 use App\Models\Suppression;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\Providers\EmailProviderFactory;
 use App\Services\SesV2Client;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -111,7 +112,7 @@ it('refreshes stale ses quota before accepting api sends', function () {
     $response->assertAccepted();
 
     expect($workspace)->toBeInstanceOf(Workspace::class)
-        ->and($source->fresh()->last_quota['Max24HourSend'])->toBe(50000)
+        ->and($source->fresh()->last_quota['max_24_hour_send'])->toBe(50000)
         ->and(Email::query()->where('subject', 'Quota refreshed')->exists())->toBeTrue();
 
     Queue::assertPushed(SendQueuedEmail::class);
@@ -166,7 +167,7 @@ it('sends queued email jobs through ses and records the response', function () {
 
     $email = Email::query()->firstOrFail();
 
-    (new SendQueuedEmail($email->id))->handle(new class extends SesV2Client
+    $this->app->bind(SesV2Client::class, fn () => new class extends SesV2Client
     {
         public function sendRawEmail(Source $source, string $mime, array $destination = []): array
         {
@@ -175,6 +176,8 @@ it('sends queued email jobs through ses and records the response', function () {
             return ['message_id' => 'ses-message-1', 'response' => ['MessageId' => 'ses-message-1']];
         }
     });
+
+    (new SendQueuedEmail($email->id))->handle(app(EmailProviderFactory::class));
 
     expect($email->fresh())
         ->workspace_id->toBe($workspace->id)
@@ -207,7 +210,7 @@ it('sends bcc recipients through an explicit ses destination', function () {
 
     expect($email->recipients()->where('type', 'bcc')->pluck('email')->all())->toBe(['bea@example.com']);
 
-    (new SendQueuedEmail($email->id))->handle(app(SesV2Client::class));
+    (new SendQueuedEmail($email->id))->handle(app(EmailProviderFactory::class));
 
     Http::assertSent(function (Request $request): bool {
         if (! str_contains($request->url(), '/v2/email/outbound-emails')) {
