@@ -2,6 +2,8 @@
 
 Larasend is a self-hosted transactional email platform for Laravel teams. It gives you a clean HTTP API, dashboard, activity log, API keys, delivery events, suppressions, and a Laravel mail transport while sending through your own Amazon SES account or Cloudflare Email Service.
 
+![Larasend activity dashboard](.github/dashboard.png)
+
 Larasend is built with Laravel, Inertia, Vue, PostgreSQL, Redis, and Docker.
 
 ## Why Larasend?
@@ -318,6 +320,10 @@ Please report security issues privately before opening a public issue.
 Issues and pull requests are welcome. Before opening a PR, run the verification commands above and keep changes focused.
 
 This project follows Laravel conventions closely: controllers stay thin, business logic lives in services/actions, tests use Pest, and frontend pages are built with Inertia and Vue.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=savvyagents/larasend&type=Date)](https://www.star-history.com/#savvyagents/larasend&Date)
 
 ## License
 
