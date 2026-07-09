@@ -101,3 +101,24 @@ it('reports pending when doh finds no record', function () {
 
     expect($matches)->toBeFalse();
 });
+
+it('verifies ses dkim cname records through doh', function () {
+    Http::fake([
+        'https://cloudflare-dns.com/*' => Http::response([
+            'Status' => 0,
+            'Answer' => [[
+                'name' => 'abc123._domainkey.mail.example.com',
+                'type' => 5,
+                'data' => 'abc123.dkim.amazonses.com.',
+            ]],
+        ]),
+    ]);
+
+    $matches = app(DnsRecordVerifier::class)->matches([
+        'type' => 'CNAME',
+        'name' => 'abc123._domainkey.mail.example.com',
+        'value' => 'abc123.dkim.amazonses.com',
+    ]);
+
+    expect($matches)->toBeTrue();
+});
