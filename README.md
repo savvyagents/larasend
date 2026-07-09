@@ -81,7 +81,13 @@ Paste the generated `base64:...` value into `APP_KEY` in `.env`, then start Lara
 docker compose up -d
 ```
 
-Open `APP_URL`, create the first user, and follow onboarding.
+This starts everything Larasend needs: the web app (which runs migrations automatically on boot), the queue worker, the scheduler for background automation (DNS verification, quota refresh, suppression sync), PostgreSQL, and Redis.
+
+Open `APP_URL`, create the first user, and follow onboarding. To confirm the install is healthy:
+
+```bash
+docker compose exec app php artisan larasend:doctor
+```
 
 ## Amazon SES Setup
 
@@ -127,7 +133,7 @@ If you prefer a minimal token with only "Email Sending: Edit", onboard the domai
 Differences from SES to be aware of:
 
 - Cloudflare has no delivery-event webhooks and no open/click tracking. Delivery state is recorded from the SMTP response at send time.
-- Suppressions (hard bounces, spam complaints) are managed on Cloudflare's account-level list and sync into Larasend hourly. This requires the Laravel scheduler to be running (`php artisan schedule:work`, or a cron entry calling `schedule:run`).
+- Suppressions (hard bounces, spam complaints) are managed on Cloudflare's account-level list and sync into Larasend hourly. This requires the Laravel scheduler, which the Docker stack runs automatically as the `scheduler` service; for non-Docker installs run `php artisan schedule:work` or add a cron entry calling `schedule:run`.
 - Quota is a daily allowance rather than a rolling 24-hour window.
 
 ## Sending Email Over HTTP

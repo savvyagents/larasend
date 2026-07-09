@@ -24,6 +24,18 @@ services:
     volumes:
       - larasend-storage:/var/www/html/storage
 
+  scheduler:
+    image: ${LARASEND_IMAGE:-ghcr.io/savvyagents/larasend:latest}
+    command: php artisan schedule:work
+    env_file: .env
+    environment:
+      LARASEND_RUN_MIGRATIONS: "false"
+    depends_on:
+      - app
+      - redis
+    volumes:
+      - larasend-storage:/var/www/html/storage
+
   postgres:
     image: postgres:17-alpine
     environment:

@@ -99,8 +99,8 @@ class OnboardingController extends Controller
             'progress' => $progress,
             'install' => [
                 'compose' => 'docker compose up -d',
-                'migrate' => 'docker compose exec app php artisan migrate --force',
-                'worker' => 'docker compose exec app php artisan queue:work --queue=default,webhooks',
+                'migrate' => 'docker compose exec app php artisan larasend:doctor',
+                'worker' => 'docker compose logs -f queue scheduler',
             ],
         ]);
     }
