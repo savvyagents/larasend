@@ -7,6 +7,7 @@ use App\Models\Project;
 use App\Models\Source;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\Providers\CloudflareEmailProvider;
 use App\Services\Providers\CloudflareSmtpTransportFactory;
 use App\Services\Providers\EmailProviderFactory;
 use Illuminate\Support\Facades\Queue;
@@ -185,4 +186,31 @@ it('rethrows transient cloudflare smtp failures so the queue can retry', functio
         ->toThrow(TransportException::class);
 
     expect($email->fresh()->status)->toBe('sending');
+});
+
+it('redacts smtp auth credentials from stored transcripts', function () {
+    $provider = app(CloudflareEmailProvider::class);
+
+    $transcript = implode("\r\n", [
+        '< 220 mx.cloudflare.net Cloudflare Email ESMTP Service ready',
+        '> EHLO [127.0.0.1]',
+        '< 250-AUTH PLAIN LOGIN',
+        '> AUTH LOGIN',
+        '< 334 VXNlcm5hbWU6',
+        '> YXBpX3Rva2Vu',
+        '< 334 UGFzc3dvcmQ6',
+        '> c3VwZXItc2VjcmV0LXRva2Vu',
+        '< 235 2.7.0 Authentication successful',
+        '> MAIL FROM:<notifications@mail.example.com>',
+        '< 250 2.1.0 Ok',
+        '< 250 2.0.0 Ok <queue-id-123@mail.example.com>',
+    ]);
+
+    $sanitized = $provider->sanitizeSmtpTranscript($transcript);
+
+    expect($sanitized)->not->toContain('YXBpX3Rva2Vu')
+        ->not->toContain('c3VwZXItc2VjcmV0LXRva2Vu')
+        ->toContain('> [redacted]')
+        ->toContain('MAIL FROM:<notifications@mail.example.com>')
+        ->toContain('250 2.0.0 Ok');
 });

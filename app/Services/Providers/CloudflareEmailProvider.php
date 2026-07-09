@@ -178,13 +178,59 @@ class CloudflareEmailProvider implements EmailProvider
             throw $this->mapTransportException($exception, $sender);
         }
 
+        $transcript = $this->sanitizeSmtpTranscript(trim((string) $sent?->getDebug()));
+
         return [
             'message_id' => $this->extractMessageId($mime),
-            'response' => [
+            'response' => array_filter([
                 'provider' => 'cloudflare',
-                'smtp' => trim((string) $sent?->getDebug()) ?: null,
-            ],
+                'remote_id' => $this->extractRemoteQueueId($transcript),
+                'smtp' => $transcript ?: null,
+            ]),
         ];
+    }
+
+    /**
+     * The raw SMTP debug transcript contains the AUTH exchange, whose base64
+     * payloads decode to the literal API token. Redact every client line in
+     * the authentication phase before the transcript is persisted anywhere.
+     */
+    public function sanitizeSmtpTranscript(string $transcript): string
+    {
+        $sanitized = [];
+        $inAuth = false;
+
+        foreach (preg_split('/\r\n|\n/', $transcript) ?: [] as $line) {
+            if (preg_match('/> AUTH\b.*$/i', $line)) {
+                $inAuth = true;
+                $sanitized[] = preg_replace('/(> AUTH \S+).*$/i', '$1 [redacted]', $line);
+
+                continue;
+            }
+
+            if ($inAuth && str_contains($line, '> ')) {
+                $sanitized[] = preg_replace('/> .*$/', '> [redacted]', $line);
+
+                continue;
+            }
+
+            if ($inAuth && preg_match('/< (235|535|501)/', $line)) {
+                $inAuth = false;
+            }
+
+            $sanitized[] = $line;
+        }
+
+        return implode("\n", $sanitized);
+    }
+
+    private function extractRemoteQueueId(string $transcript): ?string
+    {
+        if (preg_match('/250 2\.0\.0 Ok <([^>]+)>/', $transcript, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
     }
 
     public function fetchQuota(Source $source): array
