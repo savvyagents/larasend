@@ -87,19 +87,30 @@ class SesV2Client
     }
 
     /**
+     * The explicit Destination is required for Bcc delivery: Symfony Mime
+     * strips the Bcc header from the raw message, so SES cannot derive
+     * Bcc recipients from the MIME headers alone.
+     *
+     * @param  array{ToAddresses?: array<int, string>, CcAddresses?: array<int, string>, BccAddresses?: array<int, string>}  $destination
      * @return array{message_id: string|null, response: array<string, mixed>}
      */
-    public function sendRawEmail(Source $source, string $mime): array
+    public function sendRawEmail(Source $source, string $mime, array $destination = []): array
     {
         $target = "https://email.{$source->ses_region}.amazonaws.com/v2/email/outbound-emails";
-        $payload = json_encode([
+        $body = [
             'Content' => [
                 'Raw' => [
                     'Data' => base64_encode($mime),
                 ],
             ],
             'ConfigurationSetName' => $source->ses_configuration_set,
-        ], JSON_THROW_ON_ERROR);
+        ];
+
+        if ($destination !== []) {
+            $body['Destination'] = $destination;
+        }
+
+        $payload = json_encode($body, JSON_THROW_ON_ERROR);
 
         $headers = $this->signedHeaders($source, 'POST', $target, $payload);
         $response = Http::withHeaders($headers)

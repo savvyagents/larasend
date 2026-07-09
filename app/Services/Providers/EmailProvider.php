@@ -26,11 +26,12 @@ interface EmailProvider
     public function validateCredentials(Source $source): array;
 
     /**
-     * Send a fully built raw MIME message. The envelope carries the SMTP-level
-     * sender and complete recipient list (to, cc, and bcc) because bcc
-     * recipients are never present in the MIME headers.
+     * Send a fully built raw MIME message. The envelope carries the sender
+     * and recipients both flat and grouped by type, because bcc recipients
+     * are never present in the MIME headers: SMTP providers use the flat
+     * list as RCPT TO, SES builds an explicit Destination from the groups.
      *
-     * @param  array{from: string, recipients: array<int, string>}  $envelope
+     * @param  array{from: string, recipients: array<int, string>, to: array<int, string>, cc: array<int, string>, bcc: array<int, string>}  $envelope
      * @return array{message_id: string|null, response: array<string, mixed>}
      */
     public function sendRawEmail(Source $source, string $mime, array $envelope): array;

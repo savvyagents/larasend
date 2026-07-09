@@ -79,9 +79,15 @@ class SesEmailProvider implements EmailProvider
 
     public function sendRawEmail(Source $source, string $mime, array $envelope): array
     {
-        // SES v2 raw send derives recipients from the MIME headers; the
-        // envelope is only needed by SMTP-based providers.
-        return $this->sesClient->sendRawEmail($source, $mime);
+        // The explicit Destination is required for Bcc delivery: the stored
+        // MIME has no Bcc header, so SES cannot derive those recipients.
+        $destination = array_filter([
+            'ToAddresses' => $envelope['to'] ?? [],
+            'CcAddresses' => $envelope['cc'] ?? [],
+            'BccAddresses' => $envelope['bcc'] ?? [],
+        ]);
+
+        return $this->sesClient->sendRawEmail($source, $mime, $destination);
     }
 
     public function fetchQuota(Source $source): array
