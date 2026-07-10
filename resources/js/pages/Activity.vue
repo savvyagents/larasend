@@ -30,6 +30,7 @@ import {
     watch,
 } from 'vue';
 import AppLogoIcon from '@/components/AppLogoIcon.vue';
+import { Toaster } from '@/components/ui/sonner';
 import { getInitials } from '@/composables/useInitials';
 
 type Metric = {
@@ -302,6 +303,7 @@ const props = defineProps<{
         created_at: string;
     }[];
     newApiKey: string | null;
+    inboundError: string | null;
     setup: {
         webhook_url: string | null;
         next_step: {
@@ -4238,6 +4240,15 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     class="rounded-md bg-emerald-500/12 px-2.5 py-1 font-mono text-xs text-emerald-400"
                                     >enabled</span
                                 >
+                                <div
+                                    v-if="
+                                        inboundError &&
+                                        !selectedIdentity.inbound_enabled_at
+                                    "
+                                    class="w-full rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-950 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100"
+                                >
+                                    {{ inboundError }}
+                                </div>
                                 <button
                                     v-else-if="workspace.can_manage_domains"
                                     type="button"
@@ -6041,4 +6052,5 @@ function recipientTitle(email: EmailRow): string | undefined {
             </section>
         </div>
     </div>
+    <Toaster />
 </template>

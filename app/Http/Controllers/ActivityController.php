@@ -155,6 +155,7 @@ class ActivityController extends Controller
                 : null,
             'apiKeys' => $project->apiKeys()->latest()->get(['id', 'name', 'prefix', 'scopes', 'last_used_at', 'last_used_ip', 'last_used_user_agent', 'expires_at', 'created_at']),
             'newApiKey' => session('newApiKey'),
+            'inboundError' => session('inboundError'),
             'setup' => $this->setup($project, $source, $context),
             'sidebarCounts' => [
                 'activity' => $project->emails()->count(),

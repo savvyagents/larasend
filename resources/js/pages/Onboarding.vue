@@ -14,6 +14,7 @@ import {
     Webhook,
 } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
+import { Toaster } from '@/components/ui/sonner';
 
 type CredentialMode =
     | 'instance_role'
@@ -1218,4 +1219,5 @@ function submit(): void {
             </form>
         </div>
     </main>
+    <Toaster />
 </template>

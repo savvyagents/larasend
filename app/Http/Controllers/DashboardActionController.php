@@ -476,7 +476,10 @@ class DashboardActionController extends Controller
         } catch (RuntimeException $exception) {
             Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
 
-            return $this->toProjectSection($project, 'identities');
+            // Also surfaced inline on the Receive email card: a transient
+            // toast is not enough feedback for an actionable failure.
+            return $this->toProjectSection($project, 'identities')
+                ->with('inboundError', $exception->getMessage());
         }
 
         $zoneApex = str($domain->domain)->explode('.')->slice(-2)->implode('.');

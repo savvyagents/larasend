@@ -90,7 +90,8 @@ it('surfaces the missing worker permission with manual instructions', function (
 
     expect($domain->fresh()->inbound_enabled_at)->toBeNull()
         ->and($toast['type'])->toBe('error')
-        ->and($toast['message'])->toContain('Workers Scripts: Edit');
+        ->and($toast['message'])->toContain('Workers Scripts: Edit')
+        ->and(session('inboundError'))->toContain('Workers Scripts: Edit');
 });
 
 it('refuses to enable inbound for non-cloudflare sources', function () {
