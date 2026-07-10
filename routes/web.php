@@ -46,6 +46,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('source/quota', [DashboardActionController::class, 'syncSourceQuota'])->name('source.quota.sync');
         Route::post('domains', [DashboardActionController::class, 'storeDomain'])->name('domains.store');
         Route::post('domains/{domain}/check-dns', [DashboardActionController::class, 'checkProjectDomain'])->name('domains.check-dns');
+        Route::post('domains/{domain}/inbound', [DashboardActionController::class, 'enableProjectDomainInbound'])->name('domains.inbound');
         Route::delete('domains/{domain}', [DashboardActionController::class, 'destroyProjectDomain'])->name('domains.destroy');
         Route::post('templates', [DashboardActionController::class, 'storeTemplate'])->name('templates.store');
         Route::post('api-keys', [DashboardActionController::class, 'storeApiKey'])->name('api-keys.store');
@@ -57,13 +58,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('bounces/retry-soft', [DashboardActionController::class, 'retrySoftBounces'])->name('bounces.retry-soft');
         Route::post('emails/{email:public_id}/resend', [DashboardActionController::class, 'resendProjectEmail'])->name('emails.resend');
         Route::get('{section}', ActivityController::class)
-            ->where('section', 'activity|sent|bounces|complaints|suppressions|identities|templates|webhooks|api-keys|send|setup|projects')
+            ->where('section', 'activity|sent|inbound|bounces|complaints|suppressions|identities|templates|webhooks|api-keys|send|setup|projects')
             ->name('section');
     });
 
     Route::get('activity', ActivityController::class)->defaults('section', 'activity')->name('activity');
     Route::get('activity/export', ActivityExportController::class)->name('activity.export');
     Route::get('sent', ActivityController::class)->defaults('section', 'sent')->name('sent');
+    Route::get('inbound', ActivityController::class)->defaults('section', 'inbound')->name('inbound');
     Route::get('bounces', ActivityController::class)->defaults('section', 'bounces')->name('bounces');
     Route::get('complaints', ActivityController::class)->defaults('section', 'complaints')->name('complaints');
     Route::get('suppressions', ActivityController::class)->defaults('section', 'suppressions')->name('suppressions');
@@ -75,6 +77,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('setup', ActivityController::class)->defaults('section', 'setup')->name('setup');
     Route::post('domains', [DashboardActionController::class, 'storeDomain'])->name('domains.store');
     Route::post('domains/{domain}/check-dns', [DashboardActionController::class, 'checkDomain'])->name('domains.check-dns');
+    Route::post('domains/{domain}/inbound', [DashboardActionController::class, 'enableDomainInbound'])->name('domains.inbound');
     Route::delete('domains/{domain}', [DashboardActionController::class, 'destroyDomain'])->name('domains.destroy');
     Route::put('source', [DashboardActionController::class, 'updateSource'])->name('source.update');
     Route::post('templates', [DashboardActionController::class, 'storeTemplate'])->name('templates.store');

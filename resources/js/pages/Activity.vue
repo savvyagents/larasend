@@ -9,6 +9,7 @@ import {
     Cloud,
     Copy,
     FileText,
+    Inbox,
     KeyRound,
     MailCheck,
     Pencil,
@@ -255,6 +256,24 @@ const props = defineProps<{
             | { type: string; name: string; value: string; status?: string }[]
             | null;
         verified_at: string | null;
+        inbound_enabled_at: string | null;
+    }[];
+    inboundEmails: {
+        public_id: string;
+        from_email: string;
+        from_name: string | null;
+        to_email: string;
+        subject: string | null;
+        text: string | null;
+        html: string | null;
+        attachments:
+            | {
+                  filename: string | null;
+                  content_type: string | null;
+                  size: number;
+              }[]
+            | null;
+        received_at: string;
     }[];
     templates: {
         slug: string;
@@ -380,7 +399,7 @@ const sourceForm = reactive({
     aws_session_token: '',
     retention_days: props.source?.retention_days ?? 90,
 });
-const domainForm = reactive({ domain: '' });
+const domainForm = useForm({ domain: '' });
 const templateForm = reactive({
     slug: '',
     name: '',
@@ -401,6 +420,7 @@ const webhookEventOptions = [
     'open',
     'click',
     'suppress',
+    'inbound.received',
 ];
 const webhookForm = reactive({
     url: '',
@@ -859,6 +879,13 @@ const navItems = computed(() => [
         count: props.sidebarCounts.sent,
     },
     {
+        label: 'Inbound',
+        section: 'inbound',
+        href: sectionHref('inbound'),
+        icon: Inbox,
+        count: props.sidebarCounts.inbound,
+    },
+    {
         label: 'Bounces',
         section: 'bounces',
         href: sectionHref('bounces'),
@@ -1058,11 +1085,37 @@ const identityStats = computed(() => {
         },
     ];
 });
+const selectedInboundId = ref<string | null>(null);
+const selectedInbound = computed(
+    () =>
+        props.inboundEmails.find(
+            (email) => email.public_id === selectedInboundId.value,
+        ) ??
+        props.inboundEmails[0] ??
+        null,
+);
+const enablingInboundDomainId = ref<number | null>(null);
+
+function enableInbound(domainId: number): void {
+    enablingInboundDomainId.value = domainId;
+    router.post(
+        projectAction(`/domains/${domainId}/inbound`),
+        {},
+        {
+            preserveScroll: true,
+            onFinish: () => {
+                enablingInboundDomainId.value = null;
+            },
+        },
+    );
+}
+
 const pageTitle = computed(() => {
     return (
         {
             activity: 'Activity',
             sent: 'Sent',
+            inbound: 'Inbound',
             bounces: 'Bounces',
             complaints: 'Complaints',
             suppressions: 'Suppressions',
@@ -1110,12 +1163,23 @@ function syncQuotaIfStale(): void {
     syncQuota(true);
 }
 
+function normalizeIdentityDomain(value: string): string {
+    const identity = value.trim();
+    const domain = identity.includes('@')
+        ? identity.slice(identity.lastIndexOf('@') + 1)
+        : identity;
+
+    return domain.replace(/^[<\s]+|[>\s.,;]+$/g, '').toLowerCase();
+}
+
 function addDomain(): void {
-    router.post(projectAction('/domains'), domainForm, {
+    domainForm.domain = normalizeIdentityDomain(domainForm.domain);
+
+    domainForm.post(projectAction('/domains'), {
         preserveScroll: true,
         onSuccess: () => {
             selectedIdentityDomain.value = domainForm.domain;
-            domainForm.domain = '';
+            domainForm.reset();
             showNewIdentity.value = false;
         },
     });
@@ -3893,18 +3957,31 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 @submit.prevent="addDomain"
                             >
                                 <label class="grid gap-2 text-sm">
-                                    <span class="text-zinc-500">Domain</span>
+                                    <span class="text-zinc-500"
+                                        >Email or domain</span
+                                    >
                                     <input
                                         v-model="domainForm.domain"
                                         class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                        placeholder="mail.example.com"
+                                        placeholder="founder@example.com"
                                         required
                                     />
+                                    <span
+                                        v-if="domainForm.errors.domain"
+                                        class="text-xs font-medium text-red-600 dark:text-red-400"
+                                    >
+                                        {{ domainForm.errors.domain }}
+                                    </span>
                                 </label>
                                 <button
                                     class="w-fit rounded-lg bg-teal-400 px-3 py-2 text-sm font-bold text-zinc-950"
+                                    :disabled="domainForm.processing"
                                 >
-                                    Create identity
+                                    {{
+                                        domainForm.processing
+                                            ? 'Creating...'
+                                            : 'Create identity'
+                                    }}
                                 </button>
                             </form>
                             <button
@@ -4139,6 +4216,45 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         </p>
                                     </div>
                                 </div>
+                            </div>
+
+                            <div
+                                v-if="isCloudflare"
+                                class="mt-5 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                            >
+                                <Inbox class="size-4 text-teal-500" />
+                                <div class="min-w-0 flex-1">
+                                    <h3 class="font-semibold">Receive email</h3>
+                                    <p class="mt-0.5 text-sm text-zinc-500">
+                                        {{
+                                            selectedIdentity.inbound_enabled_at
+                                                ? 'Inbound is on: mail to any address on this zone lands in the Inbound section and fires inbound.received webhooks.'
+                                                : 'Larasend deploys a Cloudflare Worker and routing rule so mail to this zone lands in your Inbound section.'
+                                        }}
+                                    </p>
+                                </div>
+                                <span
+                                    v-if="selectedIdentity.inbound_enabled_at"
+                                    class="rounded-md bg-emerald-500/12 px-2.5 py-1 font-mono text-xs text-emerald-400"
+                                    >enabled</span
+                                >
+                                <button
+                                    v-else-if="workspace.can_manage_domains"
+                                    type="button"
+                                    class="rounded-lg bg-teal-400 px-3 py-2 text-sm font-bold text-zinc-950 disabled:cursor-wait disabled:opacity-60"
+                                    :disabled="
+                                        enablingInboundDomainId ===
+                                        selectedIdentity.id
+                                    "
+                                    @click="enableInbound(selectedIdentity.id)"
+                                >
+                                    {{
+                                        enablingInboundDomainId ===
+                                        selectedIdentity.id
+                                            ? 'Enabling...'
+                                            : 'Enable receiving'
+                                    }}
+                                </button>
                             </div>
 
                             <div class="mt-5">
@@ -4576,6 +4692,143 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     </button>
                                 </form>
                             </section>
+                        </section>
+                    </div>
+
+                    <div
+                        v-else-if="section === 'inbound'"
+                        class="grid min-h-0 gap-0 overflow-hidden rounded-lg border border-zinc-200 bg-white lg:grid-cols-[360px_minmax(0,1fr)] dark:border-zinc-800 dark:bg-[#090a0a]"
+                    >
+                        <aside
+                            class="min-h-0 overflow-auto border-r border-zinc-200 dark:border-zinc-800"
+                        >
+                            <div
+                                class="border-b border-zinc-200 p-4 font-sans dark:border-zinc-800"
+                            >
+                                <h2 class="font-semibold">
+                                    Inbound
+                                    <span class="text-zinc-500">{{
+                                        inboundEmails.length
+                                    }}</span>
+                                </h2>
+                                <p class="mt-1 text-sm text-zinc-500">
+                                    Email received for your domains. Enable
+                                    receiving per domain under Domains.
+                                </p>
+                            </div>
+                            <div
+                                v-if="!inboundEmails.length"
+                                class="p-4 font-sans text-sm text-zinc-500"
+                            >
+                                Nothing received yet. Enable receiving on a
+                                domain, then send an email to any address on it.
+                            </div>
+                            <button
+                                v-for="email in inboundEmails"
+                                :key="email.public_id"
+                                type="button"
+                                class="grid w-full gap-1 border-b border-zinc-200 p-4 text-left font-sans transition hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-[#141618]"
+                                :class="
+                                    selectedInbound?.public_id ===
+                                    email.public_id
+                                        ? 'bg-teal-50 dark:bg-teal-400/10'
+                                        : ''
+                                "
+                                @click="selectedInboundId = email.public_id"
+                            >
+                                <div
+                                    class="flex items-baseline justify-between gap-2"
+                                >
+                                    <span
+                                        class="truncate text-sm font-semibold"
+                                    >
+                                        {{
+                                            email.from_name || email.from_email
+                                        }}
+                                    </span>
+                                    <span
+                                        class="shrink-0 font-mono text-[11px] text-zinc-500"
+                                    >
+                                        {{ relativeTime(email.received_at) }}
+                                    </span>
+                                </div>
+                                <div class="truncate text-sm">
+                                    {{ email.subject || '(no subject)' }}
+                                </div>
+                                <div
+                                    class="truncate font-mono text-[11px] text-zinc-500"
+                                >
+                                    to {{ email.to_email }}
+                                </div>
+                            </button>
+                        </aside>
+                        <section
+                            v-if="selectedInbound"
+                            class="grid min-h-0 content-start gap-4 overflow-auto p-5 font-sans"
+                        >
+                            <div>
+                                <h2 class="text-lg font-semibold">
+                                    {{
+                                        selectedInbound.subject ||
+                                        '(no subject)'
+                                    }}
+                                </h2>
+                                <div
+                                    class="mt-1 grid gap-0.5 font-mono text-xs text-zinc-500"
+                                >
+                                    <span>
+                                        from
+                                        {{
+                                            selectedInbound.from_name
+                                                ? `${selectedInbound.from_name} <${selectedInbound.from_email}>`
+                                                : selectedInbound.from_email
+                                        }}
+                                    </span>
+                                    <span
+                                        >to {{ selectedInbound.to_email }}</span
+                                    >
+                                    <span
+                                        v-if="
+                                            selectedInbound.attachments?.length
+                                        "
+                                    >
+                                        {{ selectedInbound.attachments.length }}
+                                        attachment{{
+                                            selectedInbound.attachments
+                                                .length === 1
+                                                ? ''
+                                                : 's'
+                                        }}
+                                        ·
+                                        {{
+                                            selectedInbound.attachments
+                                                .map((a) => a.filename)
+                                                .filter(Boolean)
+                                                .join(', ')
+                                        }}
+                                    </span>
+                                </div>
+                            </div>
+                            <iframe
+                                v-if="selectedInbound.html"
+                                :srcdoc="selectedInbound.html"
+                                sandbox=""
+                                class="h-[60vh] w-full rounded-lg border border-zinc-200 bg-white dark:border-zinc-800"
+                                title="Inbound email preview"
+                            />
+                            <pre
+                                v-else
+                                class="rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs whitespace-pre-wrap text-zinc-800 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
+                                >{{
+                                    selectedInbound.text || '(empty body)'
+                                }}</pre
+                            >
+                        </section>
+                        <section
+                            v-else
+                            class="grid place-items-center p-10 font-sans text-sm text-zinc-500"
+                        >
+                            Select an email to preview it.
                         </section>
                     </div>
 

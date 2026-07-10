@@ -167,6 +167,17 @@ it('uses existing ses identity details when aws says the domain already exist', 
         ->and($domain->dns_records[0]['value'])->toContain('existing123');
 });
 
+it('accepts an email address when creating a sending identity', function () {
+    $user = User::factory()->create();
+    $project = fakeSesIdentityCreation($user);
+
+    $this->actingAs($user)
+        ->post('/domains', ['domain' => 'Vijay@Mail.Example.COM'])
+        ->assertRedirect('/identities');
+
+    expect($project->domains()->where('domain', 'mail.example.com')->exists())->toBeTrue();
+});
+
 it('re-checks domain dns records and stores status results', function () {
     $user = User::factory()->create();
     fakeSesIdentityCreation($user);

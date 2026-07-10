@@ -21,6 +21,7 @@ Larasend is built with Laravel, Inertia, Vue, PostgreSQL, Redis, and Docker.
 - Project-scoped API keys with scopes, expiration, rotation, and last-used metadata.
 - Activity dashboard with status filters, search, grouped timeline, inspector preview, headers, metrics, and resend.
 - Provider choice per source: Amazon SES or Cloudflare Email Service.
+- Inbound email on Cloudflare sources: one click deploys a Worker and routing rule, received mail lands in the dashboard and fires `inbound.received` webhooks.
 - SES identity setup with DKIM record guidance; Cloudflare domain verification via DNS checks.
 - SES event ingestion for delivery, bounce, complaint, open, click, and suppression events.
 - Hourly Cloudflare suppression-list sync (Cloudflare has no event webhooks or open/click tracking).
@@ -122,6 +123,8 @@ Requirements:
 - The sending domain must be an active zone on your Cloudflare account (Cloudflare DNS).
 - The account must be on the Workers Paid plan (includes 3,000 emails/month, then $0.35 per 1,000).
 - Email Service is for transactional email only, which matches what Larasend is for.
+
+Inbound email is supported on Cloudflare sources: enabling "Receive email" on a domain deploys a small Cloudflare Worker and points the zone's catch-all routing rule at it, so mail sent to any address on the zone apex lands in the Inbound section and fires `inbound.received` webhooks to your subscribed endpoints. The token additionally needs "Workers Scripts: Edit" and "Email Routing Rules: Edit" for this (added manually; the pre-filled link covers sending only).
 
 Recommended setup:
 

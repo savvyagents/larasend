@@ -137,7 +137,13 @@ class ActivityController extends Controller
                 'can_send' => $canSend,
                 'capabilities' => $this->sourceCapabilities($source),
             ] : null,
-            'domains' => $project->domains()->latest()->get(['id', 'domain', 'status', 'dns_records', 'verified_at']),
+            'domains' => $project->domains()->latest()->get(['id', 'domain', 'status', 'dns_records', 'verified_at', 'inbound_enabled_at']),
+            'inboundEmails' => $section === 'inbound'
+                ? $project->inboundEmails()
+                    ->latest('received_at')
+                    ->limit(50)
+                    ->get(['public_id', 'from_email', 'from_name', 'to_email', 'subject', 'text', 'html', 'attachments', 'received_at'])
+                : [],
             'templates' => $project->templates()->latest()->get(['slug', 'name', 'subject', 'html', 'text', 'variables', 'updated_at']),
             'webhooks' => $this->webhookEndpoints($project),
             'webhookStats' => $this->webhookStats($project),
@@ -152,6 +158,7 @@ class ActivityController extends Controller
             'setup' => $this->setup($project, $source, $context),
             'sidebarCounts' => [
                 'activity' => $project->emails()->count(),
+                'inbound' => $project->inboundEmails()->count(),
                 'sent' => $project->emails()->whereIn('status', ['sent', 'delivered', 'opened', 'clicked'])->count(),
                 'bounces' => $project->emails()->where('status', 'bounced')->count(),
                 'complaints' => $project->emails()->where('status', 'complained')->count(),
