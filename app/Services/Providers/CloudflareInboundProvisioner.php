@@ -5,6 +5,7 @@ namespace App\Services\Providers;
 use App\Models\Domain;
 use App\Models\Source;
 use App\Services\CloudflareApiClient;
+use App\Services\DnsRecordVerifier;
 use Illuminate\Support\Facades\File;
 use RuntimeException;
 use Throwable;
@@ -20,7 +21,19 @@ class CloudflareInboundProvisioner
 {
     public const WORKER_NAME = 'larasend-inbound';
 
-    public function __construct(private CloudflareApiClient $apiClient) {}
+    /**
+     * The MX records Cloudflare Email Routing expects at the zone apex.
+     */
+    private const ROUTING_MX = [
+        ['priority' => 20, 'target' => 'route1.mx.cloudflare.net'],
+        ['priority' => 59, 'target' => 'route2.mx.cloudflare.net'],
+        ['priority' => 99, 'target' => 'route3.mx.cloudflare.net'],
+    ];
+
+    public function __construct(
+        private CloudflareApiClient $apiClient,
+        private DnsRecordVerifier $dnsVerifier,
+    ) {}
 
     public function enable(Source $source, Domain $domain): void
     {
@@ -45,7 +58,6 @@ class CloudflareInboundProvisioner
         }
 
         try {
-            $this->apiClient->enableEmailRouting($source, $zone['id']);
             $this->apiClient->routeCatchAllToWorker($source, $zone['id'], self::WORKER_NAME);
         } catch (Throwable $exception) {
             throw new RuntimeException(
@@ -55,7 +67,56 @@ class CloudflareInboundProvisioner
             );
         }
 
+        $this->ensureRoutingDns($source, $zone['id'], $zone['name']);
+
         $domain->forceFill(['inbound_enabled_at' => now()])->save();
+    }
+
+    /**
+     * Delivery needs the routing MX records at the zone apex. The explicit
+     * enable endpoint is gated by a settings-level permission most tokens
+     * lack, so it is best-effort only; when the MX records are still missing
+     * afterwards they are published directly via DNS (which the token can
+     * already edit), and only an unresolvable state throws.
+     */
+    private function ensureRoutingDns(Source $source, string $zoneId, string $zoneName): void
+    {
+        try {
+            $this->apiClient->enableEmailRouting($source, $zoneId);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+
+        if ($this->routingMxPresent($zoneName)) {
+            return;
+        }
+
+        try {
+            $this->apiClient->ensureDnsRecords($source, $zoneId, collect(self::ROUTING_MX)
+                ->map(fn (array $mx): array => [
+                    'type' => 'MX',
+                    'name' => $zoneName,
+                    'content' => $mx['target'],
+                    'priority' => $mx['priority'],
+                ])
+                ->all());
+        } catch (Throwable $exception) {
+            throw new RuntimeException(
+                'The routing rule is configured, but the zone apex has no Email Routing MX records and they could not be created: '
+                    .$exception->getMessage()
+                    .' Enable Email Routing on the zone in the Cloudflare dashboard (Compute & AI > Email Service > Email Routing) to finish setup.',
+                previous: $exception,
+            );
+        }
+    }
+
+    private function routingMxPresent(string $zoneName): bool
+    {
+        return $this->dnsVerifier->matches([
+            'type' => 'MX',
+            'name' => $zoneName,
+            'value' => 'route1.mx.cloudflare.net',
+        ]);
     }
 
     public function workerCode(): string
