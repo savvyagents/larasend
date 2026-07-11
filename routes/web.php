@@ -66,6 +66,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('threads/{thread:public_id}/archive', [ThreadActionController::class, 'archive'])->name('threads.archive');
         Route::post('threads/{thread:public_id}/unarchive', [ThreadActionController::class, 'unarchive'])->name('threads.unarchive');
         Route::post('threads/{thread:public_id}/reply', [ThreadActionController::class, 'reply'])->name('threads.reply');
+        Route::post('threads/{thread:public_id}/forward', [ThreadActionController::class, 'forward'])->name('threads.forward');
         Route::post('inbox/compose', [ThreadActionController::class, 'compose'])->name('inbox.compose');
         Route::get('inbound/{inboundEmail:public_id}/attachments/{index}', InboundAttachmentController::class)
             ->whereNumber('index')

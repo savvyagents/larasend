@@ -7,7 +7,9 @@ use App\Models\Source;
 use App\Models\Thread;
 use App\Models\User;
 use App\Models\Workspace;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 
 function replyFixture(): array
 {
@@ -134,6 +136,58 @@ it('blocks replies from members without send permission', function () {
     $this->actingAs($reader)
         ->post("/projects/{$project->slug}/threads/{$thread->public_id}/reply", ['text' => 'nope'])
         ->assertForbidden();
+});
+
+it('sends uploaded files as reply attachments', function () {
+    [$user, $project, $source] = replyFixture();
+
+    Queue::fake();
+
+    receiveReplyableEmail($this, $source);
+    $thread = Thread::query()->firstOrFail();
+
+    $this->actingAs($user)
+        ->post("/projects/{$project->slug}/threads/{$thread->public_id}/reply", [
+            'text' => 'Attached the invoice.',
+            'attachments' => [
+                UploadedFile::fake()->createWithContent('invoice.txt', 'invoice contents'),
+            ],
+        ])
+        ->assertRedirect();
+
+    $email = Email::query()->firstOrFail();
+
+    expect($email->attachments)->toHaveCount(1)
+        ->and($email->attachments[0]->filename)->toBe('invoice.txt')
+        ->and(Storage::disk($email->mime_disk)->get($email->mime_path))
+        ->toContain('invoice.txt');
+});
+
+it('forwards the latest inbound message with its original attachments', function () {
+    [$user, $project, $source] = replyFixture();
+
+    Queue::fake();
+
+    receiveReplyableEmail($this, $source, withAttachment: 'attachment body here');
+    $thread = Thread::query()->firstOrFail();
+
+    $this->actingAs($user)
+        ->post("/projects/{$project->slug}/threads/{$thread->public_id}/forward", [
+            'to' => 'teammate@example.org',
+            'text' => 'Can you take this one?',
+        ])
+        ->assertRedirect();
+
+    $email = Email::query()->firstOrFail();
+
+    expect($email->from_email)->toBe('hello@example.com')
+        ->and($email->recipients()->where('type', 'to')->value('email'))->toBe('teammate@example.org')
+        ->and($email->subject)->toBe('Fwd: Question about billing')
+        ->and($email->text)->toContain('Can you take this one?')
+        ->and($email->text)->toContain('---------- Forwarded message ----------')
+        ->and($email->text)->toContain('How do I update my card?')
+        ->and($email->attachments)->toHaveCount(1)
+        ->and($email->attachments[0]->filename)->toBe('notes.txt');
 });
 
 it('streams inbound attachments from the stored mime', function () {

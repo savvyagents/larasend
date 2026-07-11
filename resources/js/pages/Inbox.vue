@@ -5,6 +5,7 @@ import {
     ArchiveRestore,
     ArrowLeft,
     AtSign,
+    Forward,
     Inbox as InboxIcon,
     Mail,
     MailOpen,
@@ -15,7 +16,8 @@ import {
     Send,
     X,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import RichTextEditor from '@/components/RichTextEditor.vue';
 import { Toaster } from '@/components/ui/sonner';
 
 type ThreadRow = {
@@ -196,11 +198,18 @@ function onKeydown(event: KeyboardEvent): void {
             break;
         case 'r':
             event.preventDefault();
-            replyBox.value?.focus();
+            replyEditor.value?.focus();
             break;
         case 'c':
             event.preventDefault();
             showCompose.value = true;
+            break;
+        case 'f':
+            if (props.canSend && props.selectedThread) {
+                event.preventDefault();
+                showForward.value = true;
+            }
+
             break;
         case '/':
             event.preventDefault();
@@ -218,41 +227,160 @@ usePoll(
     { autoStart: true },
 );
 
-const replyForm = useForm({ text: '' });
-const replyBox = ref<HTMLTextAreaElement | null>(null);
+const replyForm = useForm({ text: '', html: '', attachments: [] as File[] });
+const replyEditor = ref<InstanceType<typeof RichTextEditor> | null>(null);
 
 function sendReply(): void {
     if (!props.selectedThread || !replyForm.text.trim()) {
         return;
     }
 
-    replyForm.post(
-        `${props.project.path}/threads/${props.selectedThread.public_id}/reply`,
-        {
-            preserveScroll: true,
-            onSuccess: () => replyForm.reset(),
-        },
-    );
-}
+    const thread = props.selectedThread.public_id;
 
-function onReplyKeydown(event: KeyboardEvent): void {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-        event.preventDefault();
-        sendReply();
-    }
+    replyForm.post(`${props.project.path}/threads/${thread}/reply`, {
+        preserveScroll: true,
+        onSuccess: () => {
+            replyForm.reset();
+            localStorage.removeItem(draftKey(thread));
+        },
+    });
 }
 
 const showCompose = ref(false);
-const composeForm = useForm({ from: '', to: '', subject: '', text: '' });
+const composeForm = useForm({
+    from: '',
+    to: '',
+    subject: '',
+    text: '',
+    html: '',
+    attachments: [] as File[],
+});
 
 function sendCompose(): void {
     composeForm.post(`${props.project.path}/inbox/compose`, {
         onSuccess: () => {
             composeForm.reset();
             showCompose.value = false;
+            localStorage.removeItem(draftKey('compose'));
         },
     });
 }
+
+const showForward = ref(false);
+const forwardForm = useForm({ to: '', text: '' });
+
+function sendForward(): void {
+    if (!props.selectedThread) {
+        return;
+    }
+
+    forwardForm.post(
+        `${props.project.path}/threads/${props.selectedThread.public_id}/forward`,
+        {
+            preserveScroll: true,
+            onSuccess: () => {
+                forwardForm.reset();
+                showForward.value = false;
+            },
+        },
+    );
+}
+
+// --- Attachments -----------------------------------------------------------
+
+type AttachableForm = { attachments: File[] };
+
+function pickFiles(form: AttachableForm): void {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = () => {
+        form.attachments = [
+            ...form.attachments,
+            ...Array.from(input.files ?? []),
+        ].slice(0, 10);
+    };
+    input.click();
+}
+
+function removeFile(form: AttachableForm, index: number): void {
+    form.attachments = form.attachments.filter((_, i) => i !== index);
+}
+
+function fileSize(file: File): string {
+    return file.size >= 1024 * 1024
+        ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+        : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+}
+
+// --- Drafts ----------------------------------------------------------------
+// Unsent reply and compose text survives navigation and reloads via
+// localStorage, keyed per thread.
+
+function draftKey(scope: string): string {
+    return `larasend:draft:${props.project.slug}:${scope}`;
+}
+
+function loadDraft(scope: string): { text: string; html: string } | null {
+    try {
+        const raw = localStorage.getItem(draftKey(scope));
+
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+function saveDraft(scope: string, data: { text: string; html: string }): void {
+    if (data.text.trim()) {
+        localStorage.setItem(draftKey(scope), JSON.stringify(data));
+    } else {
+        localStorage.removeItem(draftKey(scope));
+    }
+}
+
+watch(
+    () => props.selectedThread?.public_id,
+    (thread) => {
+        const draft = thread ? loadDraft(thread) : null;
+        replyForm.text = draft?.text ?? '';
+        replyForm.html = draft?.html ?? '';
+        replyForm.attachments = [];
+    },
+    { immediate: true },
+);
+
+watch(
+    () => [replyForm.text, replyForm.html],
+    () => {
+        if (props.selectedThread && !replyForm.processing) {
+            saveDraft(props.selectedThread.public_id, {
+                text: replyForm.text,
+                html: replyForm.html,
+            });
+        }
+    },
+);
+
+watch(showCompose, (open) => {
+    if (open && !composeForm.text.trim()) {
+        const draft = loadDraft('compose');
+        composeForm.text = draft?.text ?? '';
+        composeForm.html = draft?.html ?? '';
+    }
+});
+
+watch(
+    () => [composeForm.text, composeForm.html],
+    () => {
+        if (showCompose.value && !composeForm.processing) {
+            saveDraft('compose', {
+                text: composeForm.text,
+                html: composeForm.html,
+            });
+        }
+    },
+);
 
 function attachmentUrl(messageId: string, index: number): string {
     return `${props.project.path}/inbound/${messageId}/attachments/${index}`;
@@ -296,6 +424,7 @@ function participantSummary(thread: ThreadRow): string {
                 <span>e archive</span>
                 <span>u unread</span>
                 <span>r reply</span>
+                <span>f forward</span>
                 <span>c compose</span>
                 <span>/ search</span>
             </span>
@@ -505,6 +634,16 @@ function participantSummary(thread: ThreadRow): string {
                         {{ selectedThread.unread ? 'Read' : 'Unread' }}
                     </button>
                     <button
+                        v-if="canSend"
+                        type="button"
+                        class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        title="Forward (f)"
+                        @click="showForward = true"
+                    >
+                        <Forward class="size-3.5" />
+                        Forward
+                    </button>
+                    <button
                         type="button"
                         class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                         @click="
@@ -600,15 +739,37 @@ function participantSummary(thread: ThreadRow): string {
                         <Reply class="size-3" />
                         replying as {{ selectedThread.reply_from ?? '—' }}
                     </div>
-                    <textarea
-                        ref="replyBox"
-                        v-model="replyForm.text"
-                        rows="3"
+                    <RichTextEditor
+                        ref="replyEditor"
+                        v-model="replyForm.html"
                         placeholder="Write a reply… (⌘↵ to send)"
-                        class="w-full resize-y rounded-md border border-zinc-200 bg-white p-3 text-[13px] leading-6 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
-                        @keydown="onReplyKeydown"
+                        @update:text="replyForm.text = $event"
+                        @submit="sendReply"
                     />
-                    <div class="flex items-center gap-3">
+                    <div
+                        v-if="replyForm.attachments.length"
+                        class="flex flex-wrap gap-2"
+                    >
+                        <span
+                            v-for="(file, index) in replyForm.attachments"
+                            :key="`${file.name}-${index}`"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
+                        >
+                            <Paperclip class="size-3" />
+                            {{ file.name }}
+                            <span class="text-zinc-400">
+                                {{ fileSize(file) }}
+                            </span>
+                            <button
+                                type="button"
+                                class="text-zinc-400 hover:text-red-500"
+                                @click="removeFile(replyForm, index)"
+                            >
+                                <X class="size-3" />
+                            </button>
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-2">
                         <button
                             type="submit"
                             class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
@@ -619,11 +780,26 @@ function participantSummary(thread: ThreadRow): string {
                             <Send class="size-3.5" />
                             {{ replyForm.processing ? 'Sending…' : 'Reply' }}
                         </button>
+                        <button
+                            type="button"
+                            title="Attach files"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                            @click="pickFiles(replyForm)"
+                        >
+                            <Paperclip class="size-3.5" />
+                            Attach
+                        </button>
                         <span
-                            v-if="replyForm.errors.text"
+                            v-if="
+                                replyForm.errors.text ||
+                                replyForm.errors.attachments
+                            "
                             class="text-xs text-red-500"
                         >
-                            {{ replyForm.errors.text }}
+                            {{
+                                replyForm.errors.text ||
+                                replyForm.errors.attachments
+                            }}
                         </span>
                     </div>
                 </form>
@@ -679,12 +855,120 @@ function participantSummary(thread: ThreadRow): string {
                         class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
                     />
                 </label>
-                <label class="grid gap-1.5 text-sm">
+                <div class="grid gap-1.5 text-sm">
                     <span class="text-zinc-500">Message</span>
-                    <textarea
-                        v-model="composeForm.text"
-                        rows="6"
+                    <RichTextEditor
+                        v-model="composeForm.html"
+                        min-height="120px"
+                        @update:text="composeForm.text = $event"
+                        @submit="sendCompose"
+                    />
+                </div>
+                <div
+                    v-if="composeForm.attachments.length"
+                    class="flex flex-wrap gap-2"
+                >
+                    <span
+                        v-for="(file, index) in composeForm.attachments"
+                        :key="`${file.name}-${index}`"
+                        class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
+                    >
+                        <Paperclip class="size-3" />
+                        {{ file.name }}
+                        <span class="text-zinc-400">{{ fileSize(file) }}</span>
+                        <button
+                            type="button"
+                            class="text-zinc-400 hover:text-red-500"
+                            @click="removeFile(composeForm, index)"
+                        >
+                            <X class="size-3" />
+                        </button>
+                    </span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button
+                        type="submit"
+                        class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
+                        :disabled="
+                            composeForm.processing || !composeForm.text.trim()
+                        "
+                    >
+                        <Send class="size-3.5" />
+                        {{ composeForm.processing ? 'Sending…' : 'Send' }}
+                    </button>
+                    <button
+                        type="button"
+                        title="Attach files"
+                        class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        @click="pickFiles(composeForm)"
+                    >
+                        <Paperclip class="size-3.5" />
+                        Attach
+                    </button>
+                    <span
+                        v-if="
+                            composeForm.errors.text ||
+                            composeForm.errors.from ||
+                            composeForm.errors.attachments
+                        "
+                        class="text-xs text-red-500"
+                    >
+                        {{
+                            composeForm.errors.text ||
+                            composeForm.errors.from ||
+                            composeForm.errors.attachments
+                        }}
+                    </span>
+                </div>
+            </form>
+        </div>
+
+        <div
+            v-if="showForward && selectedThread"
+            class="fixed inset-0 z-40 grid place-items-center bg-zinc-950/40 p-4 backdrop-blur-sm"
+            @click.self="showForward = false"
+        >
+            <form
+                class="grid w-full max-w-xl gap-3 rounded-xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-[#1d2125] dark:bg-[#111315]"
+                @submit.prevent="sendForward"
+            >
+                <div class="flex items-center">
+                    <h2 class="font-semibold">Forward conversation</h2>
+                    <button
+                        type="button"
+                        class="ml-auto rounded p-1 text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-100"
+                        @click="showForward = false"
+                    >
+                        <X class="size-4" />
+                    </button>
+                </div>
+                <p class="font-mono text-[11px] text-zinc-500">
+                    Forwards the latest message and its attachments as “{{
+                        selectedThread.subject || '(no subject)'
+                    }}”.
+                </p>
+                <label class="grid gap-1.5 text-sm">
+                    <span class="text-zinc-500">To</span>
+                    <input
+                        v-model="forwardForm.to"
+                        type="email"
                         required
+                        placeholder="teammate@example.com"
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
+                    />
+                    <span
+                        v-if="forwardForm.errors.to"
+                        class="text-xs text-red-500"
+                    >
+                        {{ forwardForm.errors.to }}
+                    </span>
+                </label>
+                <label class="grid gap-1.5 text-sm">
+                    <span class="text-zinc-500">Note (optional)</span>
+                    <textarea
+                        v-model="forwardForm.text"
+                        rows="3"
+                        placeholder="Adding a note above the forwarded message…"
                         class="w-full resize-y rounded-md border border-zinc-200 bg-white p-3 text-[13px] leading-6 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
                     />
                 </label>
@@ -692,19 +976,11 @@ function participantSummary(thread: ThreadRow): string {
                     <button
                         type="submit"
                         class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
-                        :disabled="composeForm.processing"
+                        :disabled="forwardForm.processing || !forwardForm.to"
                     >
-                        <Send class="size-3.5" />
-                        {{ composeForm.processing ? 'Sending…' : 'Send' }}
+                        <Forward class="size-3.5" />
+                        {{ forwardForm.processing ? 'Forwarding…' : 'Forward' }}
                     </button>
-                    <span
-                        v-if="
-                            composeForm.errors.text || composeForm.errors.from
-                        "
-                        class="text-xs text-red-500"
-                    >
-                        {{ composeForm.errors.text || composeForm.errors.from }}
-                    </span>
                 </div>
             </form>
         </div>
