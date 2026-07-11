@@ -5,6 +5,7 @@ use App\Http\Controllers\ActivityExportController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailMimeController;
 use App\Http\Controllers\EmailPreviewController;
+use App\Http\Controllers\InboundAttachmentController;
 use App\Http\Controllers\InboxController;
 use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\ProjectController;
@@ -64,6 +65,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('threads/{thread:public_id}/unread', [ThreadActionController::class, 'unread'])->name('threads.unread');
         Route::post('threads/{thread:public_id}/archive', [ThreadActionController::class, 'archive'])->name('threads.archive');
         Route::post('threads/{thread:public_id}/unarchive', [ThreadActionController::class, 'unarchive'])->name('threads.unarchive');
+        Route::post('threads/{thread:public_id}/reply', [ThreadActionController::class, 'reply'])->name('threads.reply');
+        Route::post('inbox/compose', [ThreadActionController::class, 'compose'])->name('inbox.compose');
+        Route::get('inbound/{inboundEmail:public_id}/attachments/{index}', InboundAttachmentController::class)
+            ->whereNumber('index')
+            ->name('inbound.attachments');
         Route::get('{section}', ActivityController::class)
             ->where('section', 'activity|sent|inbound|bounces|complaints|suppressions|identities|templates|webhooks|api-keys|send|setup|projects')
             ->name('section');
