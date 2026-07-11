@@ -5,8 +5,10 @@ use App\Http\Controllers\ActivityExportController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailMimeController;
 use App\Http\Controllers\EmailPreviewController;
+use App\Http\Controllers\InboxController;
 use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\ProjectController;
+use App\Http\Controllers\ThreadActionController;
 use App\Http\Controllers\WorkspaceMemberController;
 use App\Support\RegistrationAvailability;
 use Illuminate\Support\Facades\Route;
@@ -57,6 +59,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('send', [DashboardActionController::class, 'sendEmail'])->name('send.store');
         Route::post('bounces/retry-soft', [DashboardActionController::class, 'retrySoftBounces'])->name('bounces.retry-soft');
         Route::post('emails/{email:public_id}/resend', [DashboardActionController::class, 'resendProjectEmail'])->name('emails.resend');
+        Route::get('inbox', InboxController::class)->name('inbox');
+        Route::post('threads/{thread:public_id}/read', [ThreadActionController::class, 'read'])->name('threads.read');
+        Route::post('threads/{thread:public_id}/unread', [ThreadActionController::class, 'unread'])->name('threads.unread');
+        Route::post('threads/{thread:public_id}/archive', [ThreadActionController::class, 'archive'])->name('threads.archive');
+        Route::post('threads/{thread:public_id}/unarchive', [ThreadActionController::class, 'unarchive'])->name('threads.unarchive');
         Route::get('{section}', ActivityController::class)
             ->where('section', 'activity|sent|inbound|bounces|complaints|suppressions|identities|templates|webhooks|api-keys|send|setup|projects')
             ->name('section');
@@ -66,6 +73,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('activity/export', ActivityExportController::class)->name('activity.export');
     Route::get('sent', ActivityController::class)->defaults('section', 'sent')->name('sent');
     Route::get('inbound', ActivityController::class)->defaults('section', 'inbound')->name('inbound');
+    Route::get('inbox', InboxController::class)->name('inbox');
     Route::get('bounces', ActivityController::class)->defaults('section', 'bounces')->name('bounces');
     Route::get('complaints', ActivityController::class)->defaults('section', 'complaints')->name('complaints');
     Route::get('suppressions', ActivityController::class)->defaults('section', 'suppressions')->name('suppressions');

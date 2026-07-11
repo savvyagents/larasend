@@ -881,9 +881,9 @@ const navItems = computed(() => [
         count: props.sidebarCounts.sent,
     },
     {
-        label: 'Inbound',
-        section: 'inbound',
-        href: sectionHref('inbound'),
+        label: 'Inbox',
+        section: 'inbox',
+        href: sectionHref('inbox'),
         icon: Inbox,
         count: props.sidebarCounts.inbound,
     },
