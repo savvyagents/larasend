@@ -165,6 +165,7 @@ class ActivityController extends Controller
                 'complaints' => $project->emails()->where('status', 'complained')->count(),
                 'suppressions' => $project->suppressions()->count(),
             ],
+            'inboxUnread' => $project->threads()->whereNull('archived_at')->whereNull('read_at')->count(),
             'quota' => $this->quota($project, $source),
             'system' => [
                 'worker_alive' => $this->systemHealth->workerIsAlive(),

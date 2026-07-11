@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { Head, Link, router, useForm, usePoll } from '@inertiajs/vue3';
+import { Head, router, useForm, usePoll } from '@inertiajs/vue3';
 import {
     AlarmClock,
     Archive,
     ArchiveRestore,
-    ArrowLeft,
     AtSign,
     Forward,
     Inbox as InboxIcon,
@@ -19,6 +18,7 @@ import {
     X,
 } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import GlobalRail from '@/components/GlobalRail.vue';
 import RichTextEditor from '@/components/RichTextEditor.vue';
 import { Toaster } from '@/components/ui/sonner';
 
@@ -202,7 +202,17 @@ function onKeydown(event: KeyboardEvent): void {
         return;
     }
 
+    if (event.key === 'Escape' && showShortcuts.value) {
+        showShortcuts.value = false;
+
+        return;
+    }
+
     switch (event.key) {
+        case '?':
+            event.preventDefault();
+            showShortcuts.value = !showShortcuts.value;
+            break;
         case 'j':
             moveSelection(1);
             break;
@@ -266,6 +276,19 @@ function sendReply(): void {
         },
     });
 }
+
+const showShortcuts = ref(false);
+const shortcuts = [
+    ['j / k', 'Next / previous conversation'],
+    ['e', 'Archive or restore'],
+    ['u', 'Toggle read state'],
+    ['r', 'Focus the reply box'],
+    ['f', 'Forward the conversation'],
+    ['c', 'Compose a new conversation'],
+    ['/', 'Search conversations'],
+    ['⌘↵', 'Send while writing'],
+    ['?', 'Show these shortcuts'],
+];
 
 const showCompose = ref(false);
 const composeForm = useForm({
@@ -518,31 +541,21 @@ function participantSummary(thread: ThreadRow): string {
     <Head :title="pageTitle" />
 
     <div
-        class="grid h-screen grid-rows-[52px_minmax(0,1fr)] bg-[#fbfaf7] font-sans text-[13px] text-zinc-950 dark:bg-[#090a0a] dark:text-zinc-100"
+        class="grid h-screen grid-cols-[56px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)] bg-[#fbfaf7] font-sans text-[13px] text-zinc-950 dark:bg-[#090a0a] dark:text-zinc-100"
     >
+        <GlobalRail
+            class="row-span-2"
+            :project-path="project.path"
+            area="inbox"
+            :inbox-unread="counts.unread"
+        />
         <header
-            class="flex items-center gap-3 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
+            class="col-start-2 flex items-center gap-3 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
         >
-            <div
-                class="grid size-7 place-items-center rounded-md bg-teal-300 font-mono text-xs font-semibold text-zinc-950"
-            >
-                L
-            </div>
             <div class="flex items-baseline gap-2">
                 <span class="font-semibold">{{ project.name }}</span>
                 <span class="font-mono text-[11px] text-zinc-500">Inbox</span>
             </div>
-            <span
-                class="ml-2 hidden items-center gap-3 font-mono text-[10.5px] text-zinc-400 md:flex dark:text-zinc-600"
-            >
-                <span>j/k navigate</span>
-                <span>e archive</span>
-                <span>u unread</span>
-                <span>r reply</span>
-                <span>f forward</span>
-                <span>c compose</span>
-                <span>/ search</span>
-            </span>
             <button
                 v-if="canSend"
                 type="button"
@@ -552,17 +565,20 @@ function participantSummary(thread: ThreadRow): string {
                 <PenSquare class="size-3.5" />
                 Compose
             </button>
-            <Link
-                :href="project.dashboard_path"
-                class="inline-flex items-center gap-2 rounded-md border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+            <button
+                type="button"
+                title="Keyboard shortcuts (?)"
+                class="grid size-8 place-items-center rounded-md border border-zinc-200 font-mono text-xs font-semibold text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 dark:border-[#1d2125] dark:text-zinc-400 dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
                 :class="canSend ? '' : 'ml-auto'"
+                @click="showShortcuts = true"
             >
-                <ArrowLeft class="size-3.5" />
-                Dashboard
-            </Link>
+                ?
+            </button>
         </header>
 
-        <div class="grid min-h-0 grid-cols-[200px_360px_minmax(0,1fr)]">
+        <div
+            class="col-start-2 grid min-h-0 grid-cols-[200px_360px_minmax(0,1fr)]"
+        >
             <aside
                 class="grid min-h-0 content-start gap-1 overflow-auto border-r border-zinc-200 p-3 dark:border-[#1d2125]"
             >
@@ -1228,6 +1244,44 @@ function participantSummary(thread: ThreadRow): string {
                     </button>
                 </div>
             </form>
+        </div>
+    </div>
+    <div
+        v-if="showShortcuts"
+        class="fixed inset-0 z-40 grid place-items-center bg-zinc-950/40 p-4 backdrop-blur-sm"
+        @click.self="showShortcuts = false"
+    >
+        <div
+            class="grid w-full max-w-sm gap-3 rounded-xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-[#1d2125] dark:bg-[#111315]"
+        >
+            <div class="flex items-center">
+                <h2 class="font-semibold">Keyboard shortcuts</h2>
+                <button
+                    type="button"
+                    class="ml-auto rounded p-1 text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-100"
+                    @click="showShortcuts = false"
+                >
+                    <X class="size-4" />
+                </button>
+            </div>
+            <div class="grid gap-1.5">
+                <div
+                    v-for="[keys, label] in shortcuts"
+                    :key="keys"
+                    class="flex items-center gap-3"
+                >
+                    <kbd
+                        class="min-w-12 rounded border border-zinc-200 px-1.5 py-0.5 text-center font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-300"
+                    >
+                        {{ keys }}
+                    </kbd>
+                    <span
+                        class="text-[12.5px] text-zinc-600 dark:text-zinc-400"
+                    >
+                        {{ label }}
+                    </span>
+                </div>
+            </div>
         </div>
     </div>
     <Toaster />

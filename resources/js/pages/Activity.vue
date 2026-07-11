@@ -29,9 +29,8 @@ import {
     ref,
     watch,
 } from 'vue';
-import AppLogoIcon from '@/components/AppLogoIcon.vue';
+import GlobalRail from '@/components/GlobalRail.vue';
 import { Toaster } from '@/components/ui/sonner';
-import { getInitials } from '@/composables/useInitials';
 
 type Metric = {
     label: string;
@@ -212,6 +211,7 @@ const props = defineProps<{
     emails: EmailRow[];
     selectedEmail: EmailDetail | null;
     sidebarCounts: Record<string, number>;
+    inboxUnread?: number;
     quota: {
         sent: number;
         limit: number | null;
@@ -326,9 +326,6 @@ const props = defineProps<{
 }>();
 
 const page = usePage();
-const userInitials = computed(
-    () => getInitials(page.props.auth.user?.name) || 'U',
-);
 const buildLabel = computed(() => {
     const build = page.props.build as
         | { version?: string | null; sha?: string | null }
@@ -881,9 +878,9 @@ const navItems = computed(() => [
         count: props.sidebarCounts.sent,
     },
     {
-        label: 'Inbox',
-        section: 'inbox',
-        href: sectionHref('inbox'),
+        label: 'Inbound log',
+        section: 'inbound',
+        href: sectionHref('inbound'),
         icon: Inbox,
         count: props.sidebarCounts.inbound,
     },
@@ -951,6 +948,21 @@ const configItems = computed(() => [
 
 const isMailSection = computed(() =>
     ['activity', 'sent', 'bounces', 'complaints'].includes(props.section),
+);
+
+// Which global rail area owns the current section — drives which context
+// sidebar group renders.
+const activeArea = computed<'mail' | 'configure'>(() =>
+    [
+        'projects',
+        'setup',
+        'identities',
+        'templates',
+        'webhooks',
+        'api-keys',
+    ].includes(props.section)
+        ? 'configure'
+        : 'mail',
 );
 
 usePoll(
@@ -1917,20 +1929,20 @@ function recipientTitle(email: EmailRow): string | undefined {
         class="h-screen overflow-hidden bg-[#fbfaf7] font-sans text-[13px] text-zinc-900 antialiased dark:bg-[#0b0c0d] dark:text-[#e9eaec]"
     >
         <div
-            class="grid h-screen min-h-0 grid-cols-[224px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]"
+            class="grid h-screen min-h-0 grid-cols-[56px_224px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]"
         >
+            <GlobalRail
+                class="row-span-2"
+                :project-path="projectBasePath"
+                :area="activeArea"
+                :inbox-unread="inboxUnread"
+            />
             <header
-                class="col-span-2 flex h-[52px] shrink-0 items-center gap-3 border-b border-zinc-200 bg-[#fbfaf7] px-3.5 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                class="col-span-2 col-start-2 flex h-[52px] shrink-0 items-center gap-3 border-b border-zinc-200 bg-[#fbfaf7] px-3.5 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
             >
                 <div
                     class="flex h-full w-[210px] items-center gap-2 border-r border-zinc-200 pr-3 dark:border-[#1d2125]"
                 >
-                    <Link
-                        :href="sectionHref('activity')"
-                        class="grid size-[22px] place-items-center rounded-md bg-teal-300 text-[#0b0c0d]"
-                    >
-                        <AppLogoIcon class="size-[17px]" />
-                    </Link>
                     <Link
                         :href="sectionHref('activity')"
                         class="font-sans text-sm font-semibold tracking-tight"
@@ -2067,48 +2079,45 @@ function recipientTitle(email: EmailRow): string | undefined {
                 >
                     <Send class="size-3.5" /> Send
                 </Link>
-                <Link
-                    href="/settings/profile"
-                    class="grid size-[26px] place-items-center rounded-full bg-gradient-to-br from-violet-300 to-teal-300 font-mono text-[11px] font-semibold text-[#0b0c0d]"
-                    :title="`${page.props.auth.user.name} · ${page.props.auth.user.email}`"
-                    >{{ userInitials }}</Link
-                >
             </header>
 
             <aside
                 class="relative row-start-2 flex min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] px-2 py-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
             >
-                <div class="min-h-0 flex-1 overflow-y-auto pb-28">
-                    <div
-                        class="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                    >
-                        Mail
-                    </div>
-                    <nav class="space-y-0.5">
-                        <Link
-                            v-for="item in navItems"
-                            :key="item.label"
-                            :href="item.href"
-                            class="group relative flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left font-sans text-[12.5px] text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                            :class="{
-                                'bg-zinc-200/70 font-medium text-zinc-950 before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-r before:bg-teal-300 dark:bg-[#1a1e22] dark:text-zinc-100':
-                                    props.section === item.section,
-                            }"
-                        >
-                            <component :is="item.icon" class="size-3.5" />
-                            <span class="truncate">{{ item.label }}</span>
-                            <span
-                                class="ml-auto font-mono text-[10.5px] text-zinc-500 dark:text-[#6c7177]"
-                                >{{ item.count }}</span
-                            >
-                        </Link>
-                    </nav>
-
-                    <div
-                        class="mt-3 border-t border-zinc-200 pt-2 dark:border-[#16191c]"
-                    >
+                <div
+                    class="min-h-0 flex-1 overflow-y-auto"
+                    :class="activeArea === 'mail' ? 'pb-28' : 'pb-10'"
+                >
+                    <template v-if="activeArea === 'mail'">
                         <div
-                            class="px-2 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
+                            class="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
+                        >
+                            Mail
+                        </div>
+                        <nav class="space-y-0.5">
+                            <Link
+                                v-for="item in navItems"
+                                :key="item.label"
+                                :href="item.href"
+                                class="group relative flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left font-sans text-[12.5px] text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
+                                :class="{
+                                    'bg-zinc-200/70 font-medium text-zinc-950 before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-r before:bg-teal-300 dark:bg-[#1a1e22] dark:text-zinc-100':
+                                        props.section === item.section,
+                                }"
+                            >
+                                <component :is="item.icon" class="size-3.5" />
+                                <span class="truncate">{{ item.label }}</span>
+                                <span
+                                    class="ml-auto font-mono text-[10.5px] text-zinc-500 dark:text-[#6c7177]"
+                                    >{{ item.count }}</span
+                                >
+                            </Link>
+                        </nav>
+                    </template>
+
+                    <div v-else>
+                        <div
+                            class="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
                         >
                             Configuration
                         </div>
@@ -2131,6 +2140,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                 </div>
 
                 <div
+                    v-if="activeArea === 'mail'"
                     class="absolute right-2 bottom-3 left-2 rounded-lg border border-zinc-200 bg-white p-2.5 dark:border-[#1d2125] dark:bg-[#111315]"
                 >
                     <div
@@ -2200,6 +2210,12 @@ function recipientTitle(email: EmailRow): string | undefined {
                     >
                         {{ buildLabel }}
                     </div>
+                </div>
+                <div
+                    v-else
+                    class="absolute right-2 bottom-3 left-2 px-2 font-mono text-[10px] text-zinc-400 dark:text-[#6c7177]"
+                >
+                    {{ buildLabel }}
                 </div>
             </aside>
 
