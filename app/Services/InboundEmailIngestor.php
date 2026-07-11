@@ -19,7 +19,10 @@ use ZBateson\MailMimeParser\MailMimeParser;
  */
 class InboundEmailIngestor
 {
-    public function __construct(private MailMimeParser $parser) {}
+    public function __construct(
+        private MailMimeParser $parser,
+        private ThreadResolver $threads,
+    ) {}
 
     public function ingest(Source $source, string $envelopeFrom, string $envelopeTo, string $mime): InboundEmail
     {
@@ -51,6 +54,8 @@ class InboundEmailIngestor
             'mime_size' => strlen($mime),
             'received_at' => now(),
         ]);
+
+        $this->threads->attachInbound($inbound);
 
         DeliverInboundWebhook::dispatch($inbound->id)->onQueue('webhooks');
 

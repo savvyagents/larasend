@@ -70,4 +70,9 @@ class Project extends Model
     {
         return $this->hasMany(InboundEmail::class);
     }
+
+    public function threads(): HasMany
+    {
+        return $this->hasMany(Thread::class);
+    }
 }

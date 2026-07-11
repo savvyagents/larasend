@@ -62,6 +62,11 @@ class Email extends Model
         return $this->belongsTo(Template::class);
     }
 
+    public function thread(): BelongsTo
+    {
+        return $this->belongsTo(Thread::class);
+    }
+
     public function recipients(): HasMany
     {
         return $this->hasMany(EmailRecipient::class);

@@ -51,4 +51,9 @@ class InboundEmail extends Model
     {
         return $this->belongsTo(Source::class);
     }
+
+    public function thread(): BelongsTo
+    {
+        return $this->belongsTo(Thread::class);
+    }
 }

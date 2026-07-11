@@ -69,6 +69,15 @@ class CloudflareInboundProvisioner
 
         $this->ensureRoutingDns($source, $zone['id'], $zone['name']);
 
+        // Replies go out *as* the address that received the mail, which
+        // lives on the zone apex — so the apex must also be onboarded for
+        // Email Sending. Best-effort: receiving works without it.
+        try {
+            $this->apiClient->findOrCreateSendingSubdomain($source, $zone['id'], $zone['name']);
+        } catch (Throwable $exception) {
+            report($exception);
+        }
+
         $domain->forceFill(['inbound_enabled_at' => now()])->save();
     }
 
