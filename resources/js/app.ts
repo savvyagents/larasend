@@ -15,6 +15,8 @@ createInertiaApp({
                 return null;
             case name === 'Activity':
                 return null;
+            case name === 'Inbox':
+                return null;
             case name === 'Onboarding':
                 return null;
             case name.startsWith('auth/'):
