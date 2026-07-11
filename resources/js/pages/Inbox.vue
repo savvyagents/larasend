@@ -449,6 +449,54 @@ watch(
     },
 );
 
+// Message HTML renders inside a sandboxed iframe (no scripts). The wrapper
+// document gives foreign markup native typography; the load handler sizes
+// the frame to its content so short messages stay short.
+function messageDocument(html: string): string {
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;padding:1px;font:13px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#27272a;word-break:break-word;overflow-wrap:anywhere}
+img{max-width:100%;height:auto}
+p{margin:0 0 .6em}p:last-child{margin-bottom:0}
+ul,ol{margin:0 0 .6em;padding-left:1.4em}
+blockquote{margin:0 0 .6em;padding-left:.8em;border-left:2px solid #99f6e4;color:#71717a}
+pre{white-space:pre-wrap;font:12px/1.6 ui-monospace,monospace}
+a{color:#0d9488}
+table{max-width:100%}
+</style></head><body>${html}</body></html>`;
+}
+
+function fitMessageFrame(event: Event): void {
+    const frame = event.target as HTMLIFrameElement;
+    const doc = frame.contentDocument;
+
+    if (!doc) {
+        return;
+    }
+
+    const height = Math.max(
+        doc.documentElement?.scrollHeight ?? 0,
+        doc.body?.scrollHeight ?? 0,
+    );
+
+    frame.style.height = `${Math.min(Math.max(height + 6, 24), 640)}px`;
+}
+
+function statusBadgeClass(status: string | null): string {
+    if (
+        status === 'failed' ||
+        status === 'bounced' ||
+        status === 'complained'
+    ) {
+        return 'bg-red-400/90 text-zinc-950';
+    }
+
+    if (status === 'sent' || status === 'delivered') {
+        return 'bg-teal-300/80 text-zinc-950';
+    }
+
+    return 'bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200';
+}
+
 function attachmentUrl(messageId: string, index: number): string {
     return `${props.project.path}/inbound/${messageId}/attachments/${index}`;
 }
@@ -775,7 +823,7 @@ function participantSummary(thread: ThreadRow): string {
                     <article
                         v-for="message in selectedThread.messages"
                         :key="message.id"
-                        class="grid gap-2 rounded-lg border p-4"
+                        class="mx-auto grid w-full max-w-3xl gap-1.5 rounded-lg border px-4 py-3"
                         :class="
                             message.direction === 'note'
                                 ? 'border-amber-200 bg-amber-50/60 dark:border-amber-400/20 dark:bg-amber-400/5'
@@ -790,13 +838,10 @@ function participantSummary(thread: ThreadRow): string {
                             </span>
                             <span
                                 v-if="message.direction === 'outbound'"
-                                class="rounded bg-teal-300/80 px-1.5 font-mono text-[10px] font-semibold text-zinc-950"
+                                class="rounded px-1.5 font-mono text-[10px] font-semibold"
+                                :class="statusBadgeClass(message.status)"
                             >
-                                sent{{
-                                    message.status === 'failed'
-                                        ? ' · failed'
-                                        : ''
-                                }}
+                                {{ message.status ?? 'queued' }}
                             </span>
                             <span
                                 v-else-if="message.direction === 'note'"
@@ -819,10 +864,11 @@ function participantSummary(thread: ThreadRow): string {
                         </div>
                         <iframe
                             v-if="message.html"
-                            :srcdoc="message.html"
-                            sandbox=""
-                            class="h-72 w-full rounded-md border border-zinc-200 bg-white dark:border-[#1d2125]"
+                            :srcdoc="messageDocument(message.html)"
+                            sandbox="allow-same-origin"
+                            class="h-6 w-full rounded-md bg-white"
                             :title="`Message from ${message.from_email}`"
+                            @load="fitMessageFrame"
                         />
                         <pre
                             v-else
@@ -848,147 +894,159 @@ function participantSummary(thread: ThreadRow): string {
                     </article>
                 </div>
 
-                <div
-                    class="grid gap-2 border-t border-zinc-200 p-4 dark:border-[#1d2125]"
-                >
-                    <div
-                        class="flex items-center gap-1 font-mono text-[10.5px] text-zinc-500"
-                    >
-                        <button
-                            v-if="canSend"
-                            type="button"
-                            class="inline-flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition"
-                            :class="
-                                composerMode === 'reply'
-                                    ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
-                                    : 'hover:text-zinc-700 dark:hover:text-zinc-300'
-                            "
-                            @click="composerMode = 'reply'"
-                        >
-                            <Reply class="size-3" />
-                            Reply
-                        </button>
-                        <button
-                            type="button"
-                            class="inline-flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition"
-                            :class="
-                                composerMode === 'note' || !canSend
-                                    ? 'bg-amber-50 text-zinc-950 dark:bg-amber-400/10 dark:text-zinc-100'
-                                    : 'hover:text-zinc-700 dark:hover:text-zinc-300'
-                            "
-                            @click="composerMode = 'note'"
-                        >
-                            <StickyNote class="size-3" />
-                            Note
-                        </button>
-                        <span
-                            v-if="composerMode === 'reply' && canSend"
-                            class="ml-2"
-                        >
-                            replying as {{ selectedThread.reply_from ?? '—' }}
-                        </span>
-                    </div>
-                    <form
-                        v-if="composerMode === 'reply' && canSend"
-                        class="grid gap-2"
-                        @submit.prevent="sendReply"
-                    >
-                        <RichTextEditor
-                            ref="replyEditor"
-                            v-model="replyForm.html"
-                            placeholder="Write a reply… (⌘↵ to send)"
-                            @update:text="replyForm.text = $event"
-                            @submit="sendReply"
-                        />
+                <div class="border-t border-zinc-200 p-4 dark:border-[#1d2125]">
+                    <div class="mx-auto grid w-full max-w-3xl gap-2">
                         <div
-                            v-if="replyForm.attachments.length"
-                            class="flex flex-wrap gap-2"
+                            class="flex items-center gap-1 font-mono text-[10.5px] text-zinc-500"
                         >
-                            <span
-                                v-for="(file, index) in replyForm.attachments"
-                                :key="`${file.name}-${index}`"
-                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
-                            >
-                                <Paperclip class="size-3" />
-                                {{ file.name }}
-                                <span class="text-zinc-400">
-                                    {{ fileSize(file) }}
-                                </span>
-                                <button
-                                    type="button"
-                                    class="text-zinc-400 hover:text-red-500"
-                                    @click="removeFile(replyForm, index)"
-                                >
-                                    <X class="size-3" />
-                                </button>
-                            </span>
-                        </div>
-                        <div class="flex items-center gap-2">
                             <button
-                                type="submit"
-                                class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
-                                :disabled="
-                                    replyForm.processing ||
-                                    !replyForm.text.trim()
+                                v-if="canSend"
+                                type="button"
+                                class="inline-flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition"
+                                :class="
+                                    composerMode === 'reply'
+                                        ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
+                                        : 'hover:text-zinc-700 dark:hover:text-zinc-300'
                                 "
+                                @click="composerMode = 'reply'"
                             >
-                                <Send class="size-3.5" />
-                                {{
-                                    replyForm.processing ? 'Sending…' : 'Reply'
-                                }}
+                                <Reply class="size-3" />
+                                Reply
                             </button>
                             <button
                                 type="button"
-                                title="Attach files"
-                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
-                                @click="pickFiles(replyForm)"
+                                class="inline-flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition"
+                                :class="
+                                    composerMode === 'note' || !canSend
+                                        ? 'bg-amber-50 text-zinc-950 dark:bg-amber-400/10 dark:text-zinc-100'
+                                        : 'hover:text-zinc-700 dark:hover:text-zinc-300'
+                                "
+                                @click="composerMode = 'note'"
                             >
-                                <Paperclip class="size-3.5" />
-                                Attach
+                                <StickyNote class="size-3" />
+                                Note
                             </button>
                             <span
-                                v-if="
-                                    replyForm.errors.text ||
-                                    replyForm.errors.attachments
-                                "
-                                class="text-xs text-red-500"
+                                v-if="composerMode === 'reply' && canSend"
+                                class="ml-2"
                             >
-                                {{
-                                    replyForm.errors.text ||
-                                    replyForm.errors.attachments
-                                }}
+                                replying as
+                                {{ selectedThread.reply_from ?? '—' }}
                             </span>
                         </div>
-                    </form>
-                    <form v-else class="grid gap-2" @submit.prevent="sendNote">
-                        <textarea
-                            v-model="noteForm.body"
-                            rows="3"
-                            placeholder="Add an internal note for your team… (never emailed, ⌘↵ to save)"
-                            class="w-full resize-y rounded-md border border-amber-200 bg-amber-50/40 p-3 text-[13px] leading-6 transition outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/20 dark:border-amber-400/20 dark:bg-amber-400/5"
-                            @keydown="onNoteKeydown"
-                        />
-                        <div class="flex items-center gap-3">
-                            <button
-                                type="submit"
-                                class="inline-flex items-center gap-2 rounded-md bg-amber-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
-                                :disabled="
-                                    noteForm.processing || !noteForm.body.trim()
-                                "
+                        <form
+                            v-if="composerMode === 'reply' && canSend"
+                            class="grid gap-2"
+                            @submit.prevent="sendReply"
+                        >
+                            <RichTextEditor
+                                ref="replyEditor"
+                                v-model="replyForm.html"
+                                placeholder="Write a reply… (⌘↵ to send)"
+                                @update:text="replyForm.text = $event"
+                                @submit="sendReply"
+                            />
+                            <div
+                                v-if="replyForm.attachments.length"
+                                class="flex flex-wrap gap-2"
                             >
-                                <StickyNote class="size-3.5" />
-                                {{
-                                    noteForm.processing ? 'Saving…' : 'Add note'
-                                }}
-                            </button>
-                            <span
-                                v-if="noteForm.errors.body"
-                                class="text-xs text-red-500"
-                            >
-                                {{ noteForm.errors.body }}
-                            </span>
-                        </div>
-                    </form>
+                                <span
+                                    v-for="(
+                                        file, index
+                                    ) in replyForm.attachments"
+                                    :key="`${file.name}-${index}`"
+                                    class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
+                                >
+                                    <Paperclip class="size-3" />
+                                    {{ file.name }}
+                                    <span class="text-zinc-400">
+                                        {{ fileSize(file) }}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        class="text-zinc-400 hover:text-red-500"
+                                        @click="removeFile(replyForm, index)"
+                                    >
+                                        <X class="size-3" />
+                                    </button>
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button
+                                    type="submit"
+                                    class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
+                                    :disabled="
+                                        replyForm.processing ||
+                                        !replyForm.text.trim()
+                                    "
+                                >
+                                    <Send class="size-3.5" />
+                                    {{
+                                        replyForm.processing
+                                            ? 'Sending…'
+                                            : 'Reply'
+                                    }}
+                                </button>
+                                <button
+                                    type="button"
+                                    title="Attach files"
+                                    class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                                    @click="pickFiles(replyForm)"
+                                >
+                                    <Paperclip class="size-3.5" />
+                                    Attach
+                                </button>
+                                <span
+                                    v-if="
+                                        replyForm.errors.text ||
+                                        replyForm.errors.attachments
+                                    "
+                                    class="text-xs text-red-500"
+                                >
+                                    {{
+                                        replyForm.errors.text ||
+                                        replyForm.errors.attachments
+                                    }}
+                                </span>
+                            </div>
+                        </form>
+                        <form
+                            v-else
+                            class="grid gap-2"
+                            @submit.prevent="sendNote"
+                        >
+                            <textarea
+                                v-model="noteForm.body"
+                                rows="3"
+                                placeholder="Add an internal note for your team… (never emailed, ⌘↵ to save)"
+                                class="w-full resize-y rounded-md border border-amber-200 bg-amber-50/40 p-3 text-[13px] leading-6 transition outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/20 dark:border-amber-400/20 dark:bg-amber-400/5"
+                                @keydown="onNoteKeydown"
+                            />
+                            <div class="flex items-center gap-3">
+                                <button
+                                    type="submit"
+                                    class="inline-flex items-center gap-2 rounded-md bg-amber-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
+                                    :disabled="
+                                        noteForm.processing ||
+                                        !noteForm.body.trim()
+                                    "
+                                >
+                                    <StickyNote class="size-3.5" />
+                                    {{
+                                        noteForm.processing
+                                            ? 'Saving…'
+                                            : 'Add note'
+                                    }}
+                                </button>
+                                <span
+                                    v-if="noteForm.errors.body"
+                                    class="text-xs text-red-500"
+                                >
+                                    {{ noteForm.errors.body }}
+                                </span>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             </section>
             <section
