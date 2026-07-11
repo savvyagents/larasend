@@ -6,6 +6,7 @@ use App\Models\Email;
 use App\Models\InboundEmail;
 use App\Models\Project;
 use App\Models\Thread;
+use App\Models\ThreadNote;
 use App\Models\User;
 use App\Support\ProjectContext;
 use Illuminate\Database\Eloquent\Collection;
@@ -51,8 +52,9 @@ class InboxController extends Controller
             'filters' => ['q' => $search],
             'addresses' => $this->addresses($project),
             'counts' => [
-                'inbox' => $project->threads()->whereNull('archived_at')->count(),
-                'unread' => $project->threads()->whereNull('archived_at')->whereNull('read_at')->count(),
+                'inbox' => $project->threads()->whereNull('archived_at')->where($this->notSnoozed(...))->count(),
+                'unread' => $project->threads()->whereNull('archived_at')->whereNull('read_at')->where($this->notSnoozed(...))->count(),
+                'snoozed' => $project->threads()->where('snoozed_until', '>', now())->count(),
                 'archived' => $project->threads()->whereNotNull('archived_at')->count(),
             ],
             'threads' => $threads->map(fn (Thread $thread): array => $this->serializeThread($thread)),
@@ -70,8 +72,9 @@ class InboxController extends Controller
     private function threadsFor(Project $project, string $mailbox, ?string $address, string $search)
     {
         return $project->threads()
-            ->when($mailbox === 'inbox', fn ($query) => $query->whereNull('archived_at'))
-            ->when($mailbox === 'unread', fn ($query) => $query->whereNull('archived_at')->whereNull('read_at'))
+            ->when($mailbox === 'inbox', fn ($query) => $query->whereNull('archived_at')->where($this->notSnoozed(...)))
+            ->when($mailbox === 'unread', fn ($query) => $query->whereNull('archived_at')->whereNull('read_at')->where($this->notSnoozed(...)))
+            ->when($mailbox === 'snoozed', fn ($query) => $query->where('snoozed_until', '>', now()))
             ->when($mailbox === 'archived', fn ($query) => $query->whereNotNull('archived_at'))
             ->when($address, fn ($query) => $query->whereJsonContains('participants', Str::lower($address)))
             ->when($search !== '', function ($query) use ($search): void {
@@ -84,6 +87,11 @@ class InboxController extends Controller
             ->orderByDesc('last_activity_at')
             ->limit(50)
             ->get();
+    }
+
+    private function notSnoozed(mixed $query): void
+    {
+        $query->whereNull('snoozed_until')->orWhere('snoozed_until', '<=', now());
     }
 
     private function selectedThread(Project $project, string $requested, ?string $fallback): ?Thread
@@ -111,6 +119,10 @@ class InboxController extends Controller
             'message_count' => $thread->message_count,
             'unread' => $thread->read_at === null,
             'archived' => $thread->archived_at !== null,
+            'snoozed' => $thread->snoozed_until?->isFuture() === true,
+            'snoozed_until_human' => $thread->snoozed_until?->isFuture() === true
+                ? $thread->snoozed_until->diffForHumans(short: true)
+                : null,
             'last_activity_at' => $thread->last_activity_at?->toIso8601String(),
             'last_activity_human' => $thread->last_activity_at?->diffForHumans(short: true),
         ];
@@ -154,7 +166,23 @@ class InboxController extends Controller
             'at_human' => $message->created_at?->diffForHumans(short: true),
         ]);
 
+        $notes = $thread->notes()->with('user')->get()->map(fn (ThreadNote $note): array => [
+            'id' => 'note-'.$note->id,
+            'direction' => 'note',
+            'from' => $note->user?->name ?? 'Someone',
+            'from_email' => '',
+            'to' => '',
+            'subject' => null,
+            'text' => $note->body,
+            'html' => null,
+            'attachments' => [],
+            'status' => null,
+            'at' => $note->created_at?->toIso8601String(),
+            'at_human' => $note->created_at?->diffForHumans(short: true),
+        ]);
+
         return $inbound->concat($outbound)
+            ->concat($notes)
             ->sortBy('at')
             ->values()
             ->all();

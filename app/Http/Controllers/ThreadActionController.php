@@ -293,6 +293,61 @@ class ThreadActionController extends Controller
         return back();
     }
 
+    /**
+     * Hide a conversation until a preset time. A new inbound message
+     * wakes it early (see ThreadResolver::applyActivity).
+     */
+    public function snooze(Request $request, string $projectSlug, Thread $thread): RedirectResponse
+    {
+        $this->authorizeThread($thread);
+
+        $validated = $request->validate([
+            'until' => ['required', 'in:later_today,tomorrow,next_week'],
+        ]);
+
+        $until = match ($validated['until']) {
+            'later_today' => now()->addHours(3),
+            'tomorrow' => now()->addDay()->setTime(9, 0),
+            'next_week' => now()->next('monday')->setTime(9, 0),
+        };
+
+        $thread->forceFill(['snoozed_until' => $until, 'read_at' => $thread->read_at ?? now()])->save();
+
+        Inertia::flash('toast', ['type' => 'success', 'message' => 'Snoozed until '.$until->format('D, M j g:ia').'.']);
+
+        return back();
+    }
+
+    public function unsnooze(Request $request, string $projectSlug, Thread $thread): RedirectResponse
+    {
+        $this->authorizeThread($thread);
+
+        $thread->forceFill(['snoozed_until' => null])->save();
+
+        return back();
+    }
+
+    /**
+     * Internal note on the conversation — visible to the team in the
+     * timeline, never emailed. Any member can annotate, including
+     * read-only ones.
+     */
+    public function storeNote(Request $request, string $projectSlug, Thread $thread): RedirectResponse
+    {
+        $this->authorizeThread($thread);
+
+        $validated = $request->validate([
+            'body' => ['required', 'string', 'max:10000'],
+        ]);
+
+        $thread->notes()->create([
+            'user_id' => Auth::id(),
+            'body' => $validated['body'],
+        ]);
+
+        return back();
+    }
+
     private function authorizeThread(Thread $thread): Project
     {
         $user = Auth::user();

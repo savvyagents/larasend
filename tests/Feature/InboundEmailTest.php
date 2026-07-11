@@ -129,7 +129,8 @@ it('fans inbound emails out to subscribed webhook endpoints with signatures', fu
         return $request->url() === 'https://customer.test/hooks'
             && $request->hasHeader('Larasend-Event-Type', 'inbound.received')
             && str_contains($request->header('Larasend-Signature')[0] ?? '', 'v1=')
-            && ($request->data()['data']['inbound_email']['subject'] ?? null) === 'Need help with my invoice';
+            && ($request->data()['data']['inbound_email']['subject'] ?? null) === 'Need help with my invoice'
+            && str_starts_with((string) ($request->data()['data']['inbound_email']['thread_id'] ?? ''), 'thread_');
     });
 
     expect($issued['endpoint']->fresh()->last_delivered_at)->not->toBeNull();

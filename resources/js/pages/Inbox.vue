@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePoll } from '@inertiajs/vue3';
 import {
+    AlarmClock,
     Archive,
     ArchiveRestore,
     ArrowLeft,
@@ -14,6 +15,7 @@ import {
     Reply,
     Search,
     Send,
+    StickyNote,
     X,
 } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -29,13 +31,15 @@ type ThreadRow = {
     message_count: number;
     unread: boolean;
     archived: boolean;
+    snoozed: boolean;
+    snoozed_until_human: string | null;
     last_activity_at: string | null;
     last_activity_human: string | null;
 };
 
 type Message = {
     id: string;
-    direction: 'inbound' | 'outbound';
+    direction: 'inbound' | 'outbound' | 'note';
     from: string;
     from_email: string;
     to: string;
@@ -64,7 +68,12 @@ const props = defineProps<{
     address: string | null;
     filters: { q: string };
     addresses: { address: string; count: number }[];
-    counts: { inbox: number; unread: number; archived: number };
+    counts: {
+        inbox: number;
+        unread: number;
+        snoozed: number;
+        archived: number;
+    };
     threads: ThreadRow[];
     selectedThread:
         | (ThreadRow & { messages: Message[]; reply_from: string | null })
@@ -86,12 +95,24 @@ const mailboxes = computed(() => [
     },
     { key: 'unread', label: 'Unread', icon: Mail, count: null },
     {
+        key: 'snoozed',
+        label: 'Snoozed',
+        icon: AlarmClock,
+        count: props.counts.snoozed || null,
+    },
+    {
         key: 'archived',
         label: 'Archived',
         icon: Archive,
         count: null,
     },
 ]);
+
+const pageTitle = computed(() =>
+    props.counts.unread
+        ? `(${props.counts.unread}) Inbox · ${props.project.name}`
+        : `Inbox · ${props.project.name}`,
+);
 
 function visitInbox(params: Record<string, string | null>): void {
     const query: Record<string, string> = {};
@@ -286,6 +307,52 @@ function sendForward(): void {
     );
 }
 
+const showSnoozeMenu = ref(false);
+const snoozeOptions = [
+    { key: 'later_today', label: 'Later today (3h)' },
+    { key: 'tomorrow', label: 'Tomorrow 9am' },
+    { key: 'next_week', label: 'Next Monday 9am' },
+];
+
+function snoozeThread(until: string): void {
+    showSnoozeMenu.value = false;
+
+    if (!props.selectedThread) {
+        return;
+    }
+
+    router.post(
+        `${props.project.path}/threads/${props.selectedThread.public_id}/snooze`,
+        { until },
+        { preserveState: false, preserveScroll: true, showProgress: false },
+    );
+}
+
+// Composer switches between an emailed reply and an internal team note.
+const composerMode = ref<'reply' | 'note'>('reply');
+const noteForm = useForm({ body: '' });
+
+function sendNote(): void {
+    if (!props.selectedThread || !noteForm.body.trim()) {
+        return;
+    }
+
+    noteForm.post(
+        `${props.project.path}/threads/${props.selectedThread.public_id}/notes`,
+        {
+            preserveScroll: true,
+            onSuccess: () => noteForm.reset(),
+        },
+    );
+}
+
+function onNoteKeydown(event: KeyboardEvent): void {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        sendNote();
+    }
+}
+
 // --- Attachments -----------------------------------------------------------
 
 type AttachableForm = { attachments: File[] };
@@ -400,7 +467,7 @@ function participantSummary(thread: ThreadRow): string {
 </script>
 
 <template>
-    <Head :title="`Inbox · ${project.name}`" />
+    <Head :title="pageTitle" />
 
     <div
         class="grid h-screen grid-rows-[52px_minmax(0,1fr)] bg-[#fbfaf7] font-sans text-[13px] text-zinc-950 dark:bg-[#090a0a] dark:text-zinc-100"
@@ -565,9 +632,17 @@ function participantSummary(thread: ThreadRow): string {
                                 {{ participantSummary(thread) }}
                             </span>
                             <span
-                                class="shrink-0 font-mono text-[10.5px] text-zinc-500"
+                                class="inline-flex shrink-0 items-center gap-1 font-mono text-[10.5px] text-zinc-500"
                             >
-                                {{ thread.last_activity_human }}
+                                <AlarmClock
+                                    v-if="thread.snoozed"
+                                    class="size-3 text-amber-500"
+                                />
+                                {{
+                                    thread.snoozed
+                                        ? thread.snoozed_until_human
+                                        : thread.last_activity_human
+                                }}
                             </span>
                         </div>
                         <div
@@ -633,6 +708,39 @@ function participantSummary(thread: ThreadRow): string {
                         <Mail v-else class="size-3.5" />
                         {{ selectedThread.unread ? 'Read' : 'Unread' }}
                     </button>
+                    <div class="relative">
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                            :title="
+                                selectedThread.snoozed
+                                    ? `Snoozed until ${selectedThread.snoozed_until_human}`
+                                    : 'Snooze'
+                            "
+                            @click="
+                                selectedThread.snoozed
+                                    ? threadAction('unsnooze')
+                                    : (showSnoozeMenu = !showSnoozeMenu)
+                            "
+                        >
+                            <AlarmClock class="size-3.5" />
+                            {{ selectedThread.snoozed ? 'Unsnooze' : 'Snooze' }}
+                        </button>
+                        <div
+                            v-if="showSnoozeMenu"
+                            class="absolute top-full right-0 z-30 mt-1 grid w-44 rounded-md border border-zinc-200 bg-white p-1 shadow-lg dark:border-[#1d2125] dark:bg-[#111315]"
+                        >
+                            <button
+                                v-for="option in snoozeOptions"
+                                :key="option.key"
+                                type="button"
+                                class="rounded px-2 py-1.5 text-left text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                                @click="snoozeThread(option.key)"
+                            >
+                                {{ option.label }}
+                            </button>
+                        </div>
+                    </div>
                     <button
                         v-if="canSend"
                         type="button"
@@ -669,9 +777,11 @@ function participantSummary(thread: ThreadRow): string {
                         :key="message.id"
                         class="grid gap-2 rounded-lg border p-4"
                         :class="
-                            message.direction === 'outbound'
-                                ? 'border-teal-200 bg-teal-50/50 dark:border-teal-400/20 dark:bg-teal-400/5'
-                                : 'border-zinc-200 bg-white dark:border-[#1d2125] dark:bg-[#0d0f10]'
+                            message.direction === 'note'
+                                ? 'border-amber-200 bg-amber-50/60 dark:border-amber-400/20 dark:bg-amber-400/5'
+                                : message.direction === 'outbound'
+                                  ? 'border-teal-200 bg-teal-50/50 dark:border-teal-400/20 dark:bg-teal-400/5'
+                                  : 'border-zinc-200 bg-white dark:border-[#1d2125] dark:bg-[#0d0f10]'
                         "
                     >
                         <div class="flex items-baseline gap-2">
@@ -689,12 +799,22 @@ function participantSummary(thread: ThreadRow): string {
                                 }}
                             </span>
                             <span
+                                v-else-if="message.direction === 'note'"
+                                class="inline-flex items-center gap-1 rounded bg-amber-300/80 px-1.5 font-mono text-[10px] font-semibold text-zinc-950"
+                            >
+                                <StickyNote class="size-2.5" />
+                                internal note
+                            </span>
+                            <span
                                 class="ml-auto shrink-0 font-mono text-[10.5px] text-zinc-500"
                             >
                                 {{ message.at_human }}
                             </span>
                         </div>
-                        <div class="font-mono text-[10.5px] text-zinc-500">
+                        <div
+                            v-if="message.direction !== 'note'"
+                            class="font-mono text-[10.5px] text-zinc-500"
+                        >
                             to {{ message.to }}
                         </div>
                         <iframe
@@ -728,81 +848,148 @@ function participantSummary(thread: ThreadRow): string {
                     </article>
                 </div>
 
-                <form
-                    v-if="canSend"
+                <div
                     class="grid gap-2 border-t border-zinc-200 p-4 dark:border-[#1d2125]"
-                    @submit.prevent="sendReply"
                 >
                     <div
-                        class="flex items-center gap-2 font-mono text-[10.5px] text-zinc-500"
+                        class="flex items-center gap-1 font-mono text-[10.5px] text-zinc-500"
                     >
-                        <Reply class="size-3" />
-                        replying as {{ selectedThread.reply_from ?? '—' }}
-                    </div>
-                    <RichTextEditor
-                        ref="replyEditor"
-                        v-model="replyForm.html"
-                        placeholder="Write a reply… (⌘↵ to send)"
-                        @update:text="replyForm.text = $event"
-                        @submit="sendReply"
-                    />
-                    <div
-                        v-if="replyForm.attachments.length"
-                        class="flex flex-wrap gap-2"
-                    >
-                        <span
-                            v-for="(file, index) in replyForm.attachments"
-                            :key="`${file.name}-${index}`"
-                            class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
-                        >
-                            <Paperclip class="size-3" />
-                            {{ file.name }}
-                            <span class="text-zinc-400">
-                                {{ fileSize(file) }}
-                            </span>
-                            <button
-                                type="button"
-                                class="text-zinc-400 hover:text-red-500"
-                                @click="removeFile(replyForm, index)"
-                            >
-                                <X class="size-3" />
-                            </button>
-                        </span>
-                    </div>
-                    <div class="flex items-center gap-2">
                         <button
-                            type="submit"
-                            class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
-                            :disabled="
-                                replyForm.processing || !replyForm.text.trim()
+                            v-if="canSend"
+                            type="button"
+                            class="inline-flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition"
+                            :class="
+                                composerMode === 'reply'
+                                    ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
+                                    : 'hover:text-zinc-700 dark:hover:text-zinc-300'
                             "
+                            @click="composerMode = 'reply'"
                         >
-                            <Send class="size-3.5" />
-                            {{ replyForm.processing ? 'Sending…' : 'Reply' }}
+                            <Reply class="size-3" />
+                            Reply
                         </button>
                         <button
                             type="button"
-                            title="Attach files"
-                            class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
-                            @click="pickFiles(replyForm)"
+                            class="inline-flex items-center gap-1.5 rounded px-2 py-1 font-semibold transition"
+                            :class="
+                                composerMode === 'note' || !canSend
+                                    ? 'bg-amber-50 text-zinc-950 dark:bg-amber-400/10 dark:text-zinc-100'
+                                    : 'hover:text-zinc-700 dark:hover:text-zinc-300'
+                            "
+                            @click="composerMode = 'note'"
                         >
-                            <Paperclip class="size-3.5" />
-                            Attach
+                            <StickyNote class="size-3" />
+                            Note
                         </button>
                         <span
-                            v-if="
-                                replyForm.errors.text ||
-                                replyForm.errors.attachments
-                            "
-                            class="text-xs text-red-500"
+                            v-if="composerMode === 'reply' && canSend"
+                            class="ml-2"
                         >
-                            {{
-                                replyForm.errors.text ||
-                                replyForm.errors.attachments
-                            }}
+                            replying as {{ selectedThread.reply_from ?? '—' }}
                         </span>
                     </div>
-                </form>
+                    <form
+                        v-if="composerMode === 'reply' && canSend"
+                        class="grid gap-2"
+                        @submit.prevent="sendReply"
+                    >
+                        <RichTextEditor
+                            ref="replyEditor"
+                            v-model="replyForm.html"
+                            placeholder="Write a reply… (⌘↵ to send)"
+                            @update:text="replyForm.text = $event"
+                            @submit="sendReply"
+                        />
+                        <div
+                            v-if="replyForm.attachments.length"
+                            class="flex flex-wrap gap-2"
+                        >
+                            <span
+                                v-for="(file, index) in replyForm.attachments"
+                                :key="`${file.name}-${index}`"
+                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
+                            >
+                                <Paperclip class="size-3" />
+                                {{ file.name }}
+                                <span class="text-zinc-400">
+                                    {{ fileSize(file) }}
+                                </span>
+                                <button
+                                    type="button"
+                                    class="text-zinc-400 hover:text-red-500"
+                                    @click="removeFile(replyForm, index)"
+                                >
+                                    <X class="size-3" />
+                                </button>
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="submit"
+                                class="inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
+                                :disabled="
+                                    replyForm.processing ||
+                                    !replyForm.text.trim()
+                                "
+                            >
+                                <Send class="size-3.5" />
+                                {{
+                                    replyForm.processing ? 'Sending…' : 'Reply'
+                                }}
+                            </button>
+                            <button
+                                type="button"
+                                title="Attach files"
+                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                                @click="pickFiles(replyForm)"
+                            >
+                                <Paperclip class="size-3.5" />
+                                Attach
+                            </button>
+                            <span
+                                v-if="
+                                    replyForm.errors.text ||
+                                    replyForm.errors.attachments
+                                "
+                                class="text-xs text-red-500"
+                            >
+                                {{
+                                    replyForm.errors.text ||
+                                    replyForm.errors.attachments
+                                }}
+                            </span>
+                        </div>
+                    </form>
+                    <form v-else class="grid gap-2" @submit.prevent="sendNote">
+                        <textarea
+                            v-model="noteForm.body"
+                            rows="3"
+                            placeholder="Add an internal note for your team… (never emailed, ⌘↵ to save)"
+                            class="w-full resize-y rounded-md border border-amber-200 bg-amber-50/40 p-3 text-[13px] leading-6 transition outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-300/20 dark:border-amber-400/20 dark:bg-amber-400/5"
+                            @keydown="onNoteKeydown"
+                        />
+                        <div class="flex items-center gap-3">
+                            <button
+                                type="submit"
+                                class="inline-flex items-center gap-2 rounded-md bg-amber-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-wait disabled:opacity-60"
+                                :disabled="
+                                    noteForm.processing || !noteForm.body.trim()
+                                "
+                            >
+                                <StickyNote class="size-3.5" />
+                                {{
+                                    noteForm.processing ? 'Saving…' : 'Add note'
+                                }}
+                            </button>
+                            <span
+                                v-if="noteForm.errors.body"
+                                class="text-xs text-red-500"
+                            >
+                                {{ noteForm.errors.body }}
+                            </span>
+                        </div>
+                    </form>
+                </div>
             </section>
             <section
                 v-else

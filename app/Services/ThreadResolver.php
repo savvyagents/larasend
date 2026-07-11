@@ -184,10 +184,11 @@ class ThreadResolver
             'last_snippet' => Str::limit(trim((string) $snippet), 140, '…') ?: $thread->last_snippet,
             'message_count' => $thread->message_count + 1,
             'last_activity_at' => $activityAt ?? now(),
-            // A customer reply reopens the thread as unread; your own
-            // outbound message never does.
+            // A customer reply reopens the thread as unread and wakes it
+            // from archive or snooze; your own outbound message never does.
             'read_at' => $direction === 'inbound' ? null : ($thread->read_at ?? now()),
             'archived_at' => $direction === 'inbound' ? null : $thread->archived_at,
+            'snoozed_until' => $direction === 'inbound' ? null : $thread->snoozed_until,
         ])->save();
     }
 }

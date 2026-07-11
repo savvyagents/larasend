@@ -55,6 +55,11 @@ class Thread extends Model
         return $this->hasMany(InboundEmail::class);
     }
 
+    public function notes(): HasMany
+    {
+        return $this->hasMany(ThreadNote::class);
+    }
+
     /**
      * Normalize a subject for thread matching: strips reply/forward
      * prefixes and case so "RE: Fwd: Hello" and "hello" fall together.

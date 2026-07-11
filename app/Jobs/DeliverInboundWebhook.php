@@ -38,7 +38,7 @@ class DeliverInboundWebhook implements ShouldQueue
 
     public function handle(): void
     {
-        $inbound = InboundEmail::query()->with('project')->find($this->inboundEmailId);
+        $inbound = InboundEmail::query()->with(['project', 'thread'])->find($this->inboundEmailId);
 
         if (! $inbound || ! $inbound->project) {
             return;
@@ -112,6 +112,7 @@ class DeliverInboundWebhook implements ShouldQueue
                     'attachments' => $inbound->attachments,
                     'message_id' => $inbound->message_id,
                     'in_reply_to' => $inbound->in_reply_to,
+                    'thread_id' => $inbound->thread?->public_id,
                     'received_at' => $inbound->received_at->toIso8601String(),
                 ],
             ],

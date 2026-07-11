@@ -190,6 +190,63 @@ it('forwards the latest inbound message with its original attachments', function
         ->and($email->attachments[0]->filename)->toBe('notes.txt');
 });
 
+it('snoozes threads out of the inbox and wakes them on new inbound mail', function () {
+    [$user, $project, $source] = replyFixture();
+
+    Queue::fake();
+
+    receiveReplyableEmail($this, $source);
+    $thread = Thread::query()->firstOrFail();
+
+    $this->actingAs($user)
+        ->post("/projects/{$project->slug}/threads/{$thread->public_id}/snooze", ['until' => 'tomorrow'])
+        ->assertRedirect();
+
+    expect($thread->fresh()->snoozed_until)->not->toBeNull();
+
+    $inbox = $this->actingAs($user)->get("/projects/{$project->slug}/inbox");
+    $inbox->assertInertia(fn ($page) => $page
+        ->component('Inbox')
+        ->where('counts.inbox', 0)
+        ->where('counts.snoozed', 1));
+
+    $snoozed = $this->actingAs($user)->get("/projects/{$project->slug}/inbox?mailbox=snoozed");
+    $snoozed->assertInertia(fn ($page) => $page->has('threads', 1));
+
+    // A new customer message wakes the thread immediately.
+    receiveReplyableEmail($this, $source);
+
+    expect($thread->fresh()->snoozed_until)->toBeNull();
+});
+
+it('adds internal notes to the conversation timeline without sending email', function () {
+    [$user, $project, $source] = replyFixture();
+
+    Queue::fake();
+
+    receiveReplyableEmail($this, $source);
+    $thread = Thread::query()->firstOrFail();
+
+    $reader = User::factory()->create(['name' => 'Rita Reader']);
+    $project->workspace->users()->attach($reader, ['role' => 'read_only']);
+
+    $this->actingAs($reader)
+        ->post("/projects/{$project->slug}/threads/{$thread->public_id}/notes", [
+            'body' => 'Customer is on the enterprise plan — loop in success.',
+        ])
+        ->assertRedirect();
+
+    expect(Email::query()->count())->toBe(0)
+        ->and($thread->notes()->count())->toBe(1);
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?thread={$thread->public_id}")
+        ->assertInertia(fn ($page) => $page
+            ->where('selectedThread.messages.1.direction', 'note')
+            ->where('selectedThread.messages.1.from', 'Rita Reader')
+            ->where('selectedThread.messages.1.text', 'Customer is on the enterprise plan — loop in success.'));
+});
+
 it('streams inbound attachments from the stored mime', function () {
     [$user, $project, $source] = replyFixture();
 

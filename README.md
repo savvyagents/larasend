@@ -22,6 +22,7 @@ Larasend is built with Laravel, Inertia, Vue, PostgreSQL, Redis, and Docker.
 - Activity dashboard with status filters, search, grouped timeline, inspector preview, headers, metrics, and resend.
 - Provider choice per source: Amazon SES or Cloudflare Email Service.
 - Inbound email on Cloudflare sources: one click deploys a Worker and routing rule, received mail lands in the dashboard and fires `inbound.received` webhooks.
+- Team inbox: inbound and outbound mail threaded into conversations with reply, compose, forward, attachments, rich text, drafts, snooze, internal notes, and keyboard shortcuts.
 - SES identity setup with DKIM record guidance; Cloudflare domain verification via DNS checks.
 - SES event ingestion for delivery, bounce, complaint, open, click, and suppression events.
 - Hourly Cloudflare suppression-list sync (Cloudflare has no event webhooks or open/click tracking).
@@ -140,6 +141,20 @@ Differences from SES to be aware of:
 - Cloudflare has no delivery-event webhooks and no open/click tracking. Delivery state is recorded from the SMTP response at send time.
 - Suppressions (hard bounces, spam complaints) are managed on Cloudflare's account-level list and sync into Larasend hourly. This requires the Laravel scheduler, which the Docker stack runs automatically as the `scheduler` service; for non-Docker installs run `php artisan schedule:work` or add a cron entry calling `schedule:run`.
 - Quota is a daily allowance rather than a rolling 24-hour window.
+
+## Team Inbox
+
+Every project gets a shared inbox at `/projects/{slug}/inbox` where inbound mail and your outbound sends are threaded into conversations (References/In-Reply-To chains first, normalized subject + shared participant as fallback).
+
+- **Reply** goes out as the address the conversation was received on, with proper threading headers so external mail clients keep the thread intact.
+- **Compose, forward, attachments** — start new conversations, forward the latest message (original attachments included), attach files up to 10 MB each.
+- **Rich text** replies with plain-text alternatives generated automatically; unsent drafts persist locally per thread.
+- **Snooze** hides a conversation until later today, tomorrow, or next week — a new inbound message wakes it immediately.
+- **Internal notes** annotate the timeline for your team (amber cards, never emailed); read-only members can note even though they cannot send.
+- **Keyboard shortcuts**: `j`/`k` navigate, `e` archive, `u` unread, `r` reply, `f` forward, `c` compose, `/` search.
+- `inbound.received` webhook payloads include the conversation's `thread_id`.
+
+Existing mail can be grouped retroactively with `php artisan larasend:thread-backfill`, and `php artisan db:seed --class=InboxDemoSeeder` seeds sample conversations for a demo.
 
 ## Sending Email Over HTTP
 
