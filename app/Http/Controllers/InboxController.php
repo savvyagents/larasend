@@ -30,13 +30,18 @@ class InboxController extends Controller
         $mailbox = (string) $request->string('mailbox', 'inbox');
         $address = $request->string('address')->toString() ?: null;
         $search = $request->string('q')->toString();
-        $threads = $this->threadsFor($project, $mailbox, $address, $search);
+        $assigned = $request->string('assigned')->toString();
+        $page = max(1, $request->integer('page', 1));
+        $threads = $this->threadsFor($project, $user->id, $mailbox, $address, $search, $assigned, $page);
         $selected = $this->selectedThread($project, $request->string('thread')->toString(), $threads->first()?->public_id);
 
         // Opening a conversation reads it — standard mail client behavior,
         // no separate round trip. Explicit unread stays available.
-        if ($selected && $selected->read_at === null && $request->string('thread')->toString() !== '') {
-            $selected->forceFill(['read_at' => now()])->save();
+        if ($selected && $request->string('thread')->toString() !== '') {
+            $selected->userStates()->updateOrCreate(
+                ['user_id' => $user->id],
+                ['read_at' => now(), 'last_viewed_at' => now()],
+            );
         }
 
         return Inertia::render('Inbox', [
@@ -59,21 +64,26 @@ class InboxController extends Controller
                 ];
             })->values(),
             'canSend' => $project->workspace->canSendEmail($user),
+            'teamMembers' => $project->workspace->users()->select('users.id', 'users.name', 'users.email')->orderBy('name')->get(),
+            'templates' => $project->templates()->select('id', 'name', 'subject', 'html', 'text')->orderBy('name')->get(),
             'mailbox' => $mailbox,
             'address' => $address,
-            'filters' => ['q' => $search],
+            'filters' => ['q' => $search, 'assigned' => $assigned],
             'addresses' => $this->addresses($project),
             'counts' => [
-                'inbox' => $project->threads()->whereNull('archived_at')->where($this->notSnoozed(...))->count(),
-                'unread' => $project->threads()->whereNull('archived_at')->whereNull('read_at')->where($this->notSnoozed(...))->count(),
+                'inbox' => $project->threads()->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->count(),
+                'unread' => $project->threads()->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->whereDoesntHave('userStates', fn ($query) => $query->where('user_id', $user->id)->whereNotNull('read_at'))->count(),
                 'snoozed' => $project->threads()->where('snoozed_until', '>', now())->count(),
                 'archived' => $project->threads()->whereNotNull('archived_at')->count(),
+                'closed' => $project->threads()->where('status', 'closed')->count(),
             ],
-            'threads' => $threads->map(fn (Thread $thread): array => $this->serializeThread($thread)),
+            'threads' => $threads->take(50)->map(fn (Thread $thread): array => $this->serializeThread($thread, $user->id)),
+            'pagination' => ['page' => $page, 'has_more' => $threads->count() > 50],
             'selectedThread' => $selected ? [
-                ...$this->serializeThread($selected),
+                ...$this->serializeThread($selected, $user->id),
                 'messages' => $this->messagesFor($selected),
                 'reply_from' => $this->replyFromFor($selected, $source?->default_from_email),
+                'active_viewers' => $selected->userStates()->with('user:id,name')->where('user_id', '!=', $user->id)->where('last_viewed_at', '>=', now()->subMinutes(2))->get()->map(fn ($state): array => ['id' => $state->user_id, 'name' => $state->user?->name ?? 'Teammate'])->values(),
             ] : null,
         ]);
     }
@@ -81,23 +91,30 @@ class InboxController extends Controller
     /**
      * @return Collection<int, Thread>
      */
-    private function threadsFor(Project $project, string $mailbox, ?string $address, string $search)
+    private function threadsFor(Project $project, int $userId, string $mailbox, ?string $address, string $search, string $assigned, int $page)
     {
         return $project->threads()
-            ->when($mailbox === 'inbox', fn ($query) => $query->whereNull('archived_at')->where($this->notSnoozed(...)))
-            ->when($mailbox === 'unread', fn ($query) => $query->whereNull('archived_at')->whereNull('read_at')->where($this->notSnoozed(...)))
+            ->when($mailbox === 'inbox', fn ($query) => $query->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...)))
+            ->when($mailbox === 'unread', fn ($query) => $query->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->whereDoesntHave('userStates', fn ($state) => $state->where('user_id', $userId)->whereNotNull('read_at')))
             ->when($mailbox === 'snoozed', fn ($query) => $query->where('snoozed_until', '>', now()))
             ->when($mailbox === 'archived', fn ($query) => $query->whereNotNull('archived_at'))
+            ->when($mailbox === 'closed', fn ($query) => $query->where('status', 'closed'))
             ->when($address, fn ($query) => $query->whereJsonContains('participants', Str::lower($address)))
+            ->when($assigned === 'mine', fn ($query) => $query->where('assigned_to_user_id', $userId))
+            ->when($assigned === 'unassigned', fn ($query) => $query->whereNull('assigned_to_user_id'))
             ->when($search !== '', function ($query) use ($search): void {
                 $query->where(function ($inner) use ($search): void {
                     $inner->whereLike('subject', "%{$search}%")
                         ->orWhereLike('last_snippet', "%{$search}%")
-                        ->orWhereLike('participants', "%{$search}%");
+                        ->orWhereLike('participants', "%{$search}%")
+                        ->orWhereHas('inboundEmails', fn ($messages) => $messages->whereLike('text', "%{$search}%"))
+                        ->orWhereHas('emails', fn ($messages) => $messages->whereLike('text', "%{$search}%"));
                 });
             })
             ->orderByDesc('last_activity_at')
-            ->limit(50)
+            ->with(['assignedTo:id,name', 'userStates' => fn ($query) => $query->where('user_id', $userId)])
+            ->offset(($page - 1) * 50)
+            ->limit(51)
             ->get();
     }
 
@@ -120,8 +137,10 @@ class InboxController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function serializeThread(Thread $thread): array
+    private function serializeThread(Thread $thread, int $userId): array
     {
+        $state = $thread->userStates->firstWhere('user_id', $userId);
+
         return [
             'public_id' => $thread->public_id,
             'subject' => $thread->subject,
@@ -129,7 +148,7 @@ class InboxController extends Controller
             'snippet' => $thread->last_snippet,
             'direction' => $thread->last_direction,
             'message_count' => $thread->message_count,
-            'unread' => $thread->read_at === null,
+            'unread' => $state?->read_at === null,
             'archived' => $thread->archived_at !== null,
             'snoozed' => $thread->snoozed_until?->isFuture() === true,
             'snoozed_until_human' => $thread->snoozed_until?->isFuture() === true
@@ -137,6 +156,10 @@ class InboxController extends Controller
                 : null,
             'last_activity_at' => $thread->last_activity_at?->toIso8601String(),
             'last_activity_human' => $thread->last_activity_at?->diffForHumans(short: true),
+            'status' => $thread->status,
+            'priority' => $thread->priority,
+            'tags' => $thread->tags ?? [],
+            'assigned_to' => $thread->assignedTo ? ['id' => $thread->assignedTo->id, 'name' => $thread->assignedTo->name] : null,
         ];
     }
 
@@ -163,7 +186,7 @@ class InboxController extends Controller
             'at_human' => $message->received_at?->diffForHumans(short: true),
         ]);
 
-        $outbound = $thread->emails()->with('recipients')->get()->map(fn (Email $message): array => [
+        $outbound = $thread->emails()->with(['recipients', 'attachments', 'events' => fn ($query) => $query->latest('occurred_at')->limit(1)])->get()->map(fn (Email $message): array => [
             'id' => $message->public_id,
             'direction' => 'outbound',
             'from' => trim(($message->from_name ? $message->from_name.' ' : '').'<'.$message->from_email.'>'),
@@ -172,8 +195,10 @@ class InboxController extends Controller
             'subject' => $message->subject,
             'text' => $message->text,
             'html' => $message->html,
-            'attachments' => [],
+            'attachments' => $message->attachments->map(fn ($attachment): array => ['filename' => $attachment->filename, 'content_type' => $attachment->content_type, 'size' => $attachment->size])->all(),
             'status' => $message->status,
+            'status_detail' => $message->events->first()?->payload['diagnosticCode'] ?? $message->events->first()?->payload['diagnostic'] ?? null,
+            'can_retry' => in_array($message->status, ['failed', 'bounced'], true),
             'at' => $message->created_at?->toIso8601String(),
             'at_human' => $message->created_at?->diffForHumans(short: true),
         ]);

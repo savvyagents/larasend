@@ -16,6 +16,7 @@ import {
     Reply,
     Search,
     Send,
+    SlidersHorizontal,
     StickyNote,
     X,
 } from 'lucide-vue-next';
@@ -37,6 +38,10 @@ type ThreadRow = {
     snoozed_until_human: string | null;
     last_activity_at: string | null;
     last_activity_human: string | null;
+    status: 'open' | 'pending' | 'closed';
+    priority: 'low' | 'normal' | 'high' | 'urgent';
+    tags: string[];
+    assigned_to: { id: number; name: string } | null;
 };
 
 type Message = {
@@ -54,6 +59,8 @@ type Message = {
         size: number;
     }[];
     status: string | null;
+    status_detail?: string | null;
+    can_retry?: boolean;
     at: string | null;
     at_human: string | null;
 };
@@ -74,25 +81,40 @@ const props = defineProps<{
         href: string;
     }[];
     canSend: boolean;
+    teamMembers: { id: number; name: string; email: string }[];
+    templates: {
+        id: number;
+        name: string;
+        subject: string;
+        html: string | null;
+        text: string | null;
+    }[];
     mailbox: string;
     address: string | null;
-    filters: { q: string };
+    filters: { q: string; assigned: string };
     addresses: { address: string; count: number }[];
     counts: {
         inbox: number;
         unread: number;
         snoozed: number;
         archived: number;
+        closed: number;
     };
     threads: ThreadRow[];
+    pagination: { page: number; has_more: boolean };
     selectedThread:
-        | (ThreadRow & { messages: Message[]; reply_from: string | null })
+        | (ThreadRow & {
+              messages: Message[];
+              reply_from: string | null;
+              active_viewers: { id: number; name: string }[];
+          })
         | null;
 }>();
 
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const mobileThreadOpen = ref(false);
+const showFilters = ref(false);
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 
 const inboxPath = computed(() => `${props.project.path}/inbox`);
@@ -117,6 +139,7 @@ const mailboxes = computed(() => [
         icon: Archive,
         count: null,
     },
+    { key: 'closed', label: 'Closed', icon: ArchiveRestore, count: null },
 ]);
 
 const pageTitle = computed(() =>
@@ -135,6 +158,7 @@ function visitInbox(params: Record<string, string | null>): void {
         mailbox: props.mailbox,
         address: props.address,
         q: searchQuery.value,
+        assigned: props.filters.assigned,
         thread: props.selectedThread?.public_id ?? null,
         ...params,
     };
@@ -163,6 +187,13 @@ function filterAddress(address: string): void {
     });
 }
 
+function filterAssignment(assigned: string): void {
+    visitInbox({
+        assigned: props.filters.assigned === assigned ? null : assigned,
+        thread: null,
+    });
+}
+
 function openThread(publicId: string): void {
     mobileThreadOpen.value = true;
     visitInbox({ thread: publicId });
@@ -187,6 +218,46 @@ function threadAction(action: string): void {
         { preserveState: false, preserveScroll: true, showProgress: false },
     );
 }
+
+function updateWorkflow(data: Record<string, string | number | null>): void {
+    if (!props.selectedThread) {
+        return;
+    }
+
+    router.patch(
+        `${props.project.path}/threads/${props.selectedThread.public_id}/workflow`,
+        data,
+        { preserveScroll: true, showProgress: false },
+    );
+}
+
+function retryMessage(messageId: string): void {
+    router.post(
+        `${props.project.path}/emails/${messageId}/resend`,
+        {},
+        { preserveScroll: true },
+    );
+}
+
+const emptyMessage = computed(() => {
+    if (searchQuery.value) {
+        return 'No conversations match your search.';
+    }
+
+    if (props.mailbox === 'unread') {
+        return 'You are caught up. There are no unread conversations.';
+    }
+
+    if (props.mailbox === 'snoozed') {
+        return 'No conversations are snoozed.';
+    }
+
+    if (props.mailbox === 'archived') {
+        return 'No archived conversations.';
+    }
+
+    return 'Mail sent to your receiving addresses lands here.';
+});
 
 const selectedIndex = computed(() =>
     props.threads.findIndex(
@@ -275,7 +346,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
 usePoll(
     10000,
-    { only: ['threads', 'counts'], showProgress: false },
+    { only: ['threads', 'counts', 'selectedThread'], showProgress: false },
     { autoStart: true },
 );
 
@@ -315,6 +386,8 @@ const showCompose = ref(false);
 const composeForm = useForm({
     from: '',
     to: '',
+    cc: '',
+    bcc: '',
     subject: '',
     text: '',
     html: '',
@@ -329,6 +402,20 @@ function sendCompose(): void {
             localStorage.removeItem(draftKey('compose'));
         },
     });
+}
+
+function applyTemplate(templateId: string): void {
+    const template = props.templates.find(
+        (item) => item.id === Number(templateId),
+    );
+
+    if (!template) {
+        return;
+    }
+
+    composeForm.subject = template.subject;
+    composeForm.html = template.html ?? '';
+    composeForm.text = template.text ?? '';
 }
 
 const showForward = ref(false);
@@ -498,7 +585,14 @@ watch(
 // document gives foreign markup native typography; the load handler sizes
 // the frame to its content so short messages stay short.
 function messageDocument(html: string): string {
-    return `<!doctype html><html><head><meta charset="utf-8"><style>
+    const safeHtml = html
+        .replace(
+            /<img\b[^>]*>/gi,
+            '<span style="color:#71717a">[remote image blocked]</span>',
+        )
+        .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ');
+
+    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: cid:"><style>
 body{margin:0;padding:1px;font:13px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#27272a;word-break:break-word;overflow-wrap:anywhere}
 img{max-width:100%;height:auto}
 p{margin:0 0 .6em}p:last-child{margin-bottom:0}
@@ -507,7 +601,7 @@ blockquote{margin:0 0 .6em;padding-left:.8em;border-left:2px solid #99f6e4;color
 pre{white-space:pre-wrap;font:12px/1.6 ui-monospace,monospace}
 a{color:#0d9488}
 table{max-width:100%}
-</style></head><body>${html}</body></html>`;
+</style></head><body>${safeHtml}</body></html>`;
 }
 
 function fitMessageFrame(event: Event): void {
@@ -590,9 +684,17 @@ function participantSummary(thread: ThreadRow): string {
                 >
             </div>
             <button
+                type="button"
+                class="ml-auto grid size-9 place-items-center rounded-lg border border-zinc-200 text-zinc-500 xl:hidden dark:border-[#1d2125]"
+                aria-label="Mailbox filters"
+                @click="showFilters = true"
+            >
+                <SlidersHorizontal class="size-4" />
+            </button>
+            <button
                 v-if="canSend"
                 type="button"
-                class="ml-auto inline-flex h-9 items-center gap-2 rounded-lg bg-teal-300 px-3 text-[13px] font-bold text-zinc-950 transition hover:brightness-105"
+                class="inline-flex h-9 items-center gap-2 rounded-lg bg-teal-300 px-3 text-[13px] font-bold text-zinc-950 transition hover:brightness-105 xl:ml-auto"
                 @click="showCompose = true"
             >
                 <PenSquare class="size-3.5" />
@@ -643,6 +745,29 @@ function participantSummary(thread: ThreadRow): string {
                 </button>
 
                 <p
+                    class="px-2 pt-4 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                >
+                    Assignment
+                </p>
+                <button
+                    v-for="entry in [
+                        { key: 'mine', label: 'Mine' },
+                        { key: 'unassigned', label: 'Unassigned' },
+                    ]"
+                    :key="entry.key"
+                    type="button"
+                    class="rounded-md px-2 py-1.5 text-left"
+                    :class="
+                        filters.assigned === entry.key
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : 'text-zinc-600 dark:text-zinc-400'
+                    "
+                    @click="filterAssignment(entry.key)"
+                >
+                    {{ entry.label }}
+                </button>
+
+                <p
                     v-if="addresses.length"
                     class="px-2 pt-4 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
                 >
@@ -664,7 +789,7 @@ function participantSummary(thread: ThreadRow): string {
                     <span
                         class="min-w-0 flex-1 truncate font-mono text-[11.5px]"
                     >
-                        {{ entry.address.split('@')[0] }}
+                        {{ entry.address }}
                     </span>
                     <span class="font-mono text-[10.5px] text-zinc-500">
                         {{ entry.count }}
@@ -703,7 +828,7 @@ function participantSummary(thread: ThreadRow): string {
                     >
                         <span class="font-semibold">No conversations</span>
                         <span class="text-xs">
-                            Mail sent to your receiving addresses lands here.
+                            {{ emptyMessage }}
                         </span>
                     </div>
                     <button
@@ -773,6 +898,37 @@ function participantSummary(thread: ThreadRow): string {
                             </span>
                         </div>
                     </button>
+                    <div
+                        v-if="pagination.page > 1 || pagination.has_more"
+                        class="flex gap-2 p-3"
+                    >
+                        <button
+                            v-if="pagination.page > 1"
+                            type="button"
+                            class="flex-1 rounded-md border border-zinc-200 py-2 text-xs font-semibold dark:border-[#1d2125]"
+                            @click="
+                                visitInbox({
+                                    page: String(pagination.page - 1),
+                                    thread: null,
+                                })
+                            "
+                        >
+                            Previous
+                        </button>
+                        <button
+                            v-if="pagination.has_more"
+                            type="button"
+                            class="flex-1 rounded-md border border-zinc-200 py-2 text-xs font-semibold dark:border-[#1d2125]"
+                            @click="
+                                visitInbox({
+                                    page: String(pagination.page + 1),
+                                    thread: null,
+                                })
+                            "
+                        >
+                            Next 50
+                        </button>
+                    </div>
                 </div>
             </section>
 
@@ -782,7 +938,7 @@ function participantSummary(thread: ThreadRow): string {
                 :class="mobileThreadOpen ? 'grid' : 'hidden'"
             >
                 <div
-                    class="flex items-center gap-2 border-b border-zinc-200 px-3 py-3 sm:gap-3 sm:px-5 dark:border-[#1d2125]"
+                    class="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-3 py-3 sm:gap-3 sm:px-5 dark:border-[#1d2125]"
                 >
                     <button
                         type="button"
@@ -792,14 +948,82 @@ function participantSummary(thread: ThreadRow): string {
                     >
                         <ArrowLeft class="size-4" />
                     </button>
-                    <div class="min-w-0 flex-1">
+                    <div class="min-w-0 flex-1 md:basis-full 2xl:basis-auto">
                         <h1 class="truncate text-[15px] font-semibold">
                             {{ selectedThread.subject || '(no subject)' }}
                         </h1>
                         <p class="truncate font-mono text-[11px] text-zinc-500">
                             {{ selectedThread.participants.join(' · ') }}
                         </p>
+                        <p
+                            v-if="selectedThread.active_viewers.length"
+                            class="mt-1 truncate text-[10.5px] font-semibold text-amber-500"
+                        >
+                            {{
+                                selectedThread.active_viewers
+                                    .map((viewer) => viewer.name)
+                                    .join(', ')
+                            }}
+                            viewing now
+                        </p>
                     </div>
+                    <select
+                        :value="selectedThread.status"
+                        class="hidden h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs font-semibold lg:block dark:border-[#1d2125]"
+                        aria-label="Conversation status"
+                        @change="
+                            updateWorkflow({
+                                status: ($event.target as HTMLSelectElement)
+                                    .value,
+                            })
+                        "
+                    >
+                        <option value="open">Open</option>
+                        <option value="pending">Pending</option>
+                        <option value="closed">Closed</option>
+                    </select>
+                    <select
+                        :value="selectedThread.assigned_to?.id ?? ''"
+                        class="hidden h-8 max-w-36 rounded-md border border-zinc-200 bg-transparent px-2 text-xs lg:block dark:border-[#1d2125]"
+                        aria-label="Assign conversation"
+                        @change="
+                            updateWorkflow({
+                                assigned_to_user_id: (
+                                    $event.target as HTMLSelectElement
+                                ).value
+                                    ? Number(
+                                          ($event.target as HTMLSelectElement)
+                                              .value,
+                                      )
+                                    : null,
+                            })
+                        "
+                    >
+                        <option value="">Unassigned</option>
+                        <option
+                            v-for="member in teamMembers"
+                            :key="member.id"
+                            :value="member.id"
+                        >
+                            {{ member.name }}
+                        </option>
+                    </select>
+                    <select
+                        :value="selectedThread.priority"
+                        class="hidden h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs lg:block dark:border-[#1d2125]"
+                        aria-label="Conversation priority"
+                        @change="
+                            updateWorkflow({
+                                priority: ($event.target as HTMLSelectElement)
+                                    .value,
+                            })
+                        "
+                    >
+                        <option value="low">Low</option>
+                        <option value="normal">Normal</option>
+                        <option value="high">High</option>
+                        <option value="urgent">Urgent</option>
+                    </select>
                     <button
                         type="button"
                         class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 2xl:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
@@ -1021,6 +1245,20 @@ function participantSummary(thread: ThreadRow): string {
                                 {{ message.at_human }}
                             </span>
                         </div>
+                        <p
+                            v-if="message.status_detail"
+                            class="rounded-md bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-300"
+                        >
+                            {{ message.status_detail }}
+                        </p>
+                        <button
+                            v-if="message.can_retry"
+                            type="button"
+                            class="w-fit rounded-md border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 dark:border-red-500/30 dark:text-red-300"
+                            @click="retryMessage(message.id)"
+                        >
+                            Retry send
+                        </button>
                         <div
                             v-if="message.direction !== 'note'"
                             class="font-mono text-[10.5px] text-zinc-500"
@@ -1030,7 +1268,7 @@ function participantSummary(thread: ThreadRow): string {
                         <iframe
                             v-if="message.html"
                             :srcdoc="messageDocument(message.html)"
-                            sandbox="allow-same-origin"
+                            sandbox="allow-same-origin allow-popups"
                             class="h-6 w-full rounded-md bg-white"
                             :title="`Message from ${message.from_email}`"
                             @load="fitMessageFrame"
@@ -1044,17 +1282,31 @@ function participantSummary(thread: ThreadRow): string {
                             v-if="message.attachments.length"
                             class="flex flex-wrap gap-2"
                         >
-                            <a
+                            <template v-if="message.direction === 'inbound'">
+                                <a
+                                    v-for="(
+                                        attachment, index
+                                    ) in message.attachments"
+                                    :key="attachment.filename ?? index"
+                                    :href="attachmentUrl(message.id, index)"
+                                    class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 transition hover:border-teal-300 hover:text-zinc-950 dark:border-[#1d2125] dark:text-zinc-400 dark:hover:text-zinc-100"
+                                >
+                                    <Paperclip class="size-3" />
+                                    {{ attachment.filename ?? 'attachment' }}
+                                </a>
+                            </template>
+                            <span
                                 v-for="(
                                     attachment, index
-                                ) in message.attachments"
-                                :key="attachment.filename ?? index"
-                                :href="attachmentUrl(message.id, index)"
-                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 transition hover:border-teal-300 hover:text-zinc-950 dark:border-[#1d2125] dark:text-zinc-400 dark:hover:text-zinc-100"
+                                ) in message.direction === 'outbound'
+                                    ? message.attachments
+                                    : []"
+                                :key="`outbound-${attachment.filename ?? index}`"
+                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
                             >
                                 <Paperclip class="size-3" />
                                 {{ attachment.filename ?? 'attachment' }}
-                            </a>
+                            </span>
                         </div>
                     </article>
                 </div>
@@ -1223,6 +1475,100 @@ function participantSummary(thread: ThreadRow): string {
         </div>
 
         <div
+            v-if="showFilters"
+            class="fixed inset-0 z-50 bg-zinc-950/45 xl:hidden"
+            @click.self="showFilters = false"
+        >
+            <aside
+                class="grid h-full w-72 content-start gap-1 overflow-y-auto bg-white p-4 shadow-2xl dark:bg-[#111315]"
+            >
+                <div class="mb-3 flex items-center">
+                    <h2 class="font-semibold">Mailbox filters</h2>
+                    <button
+                        type="button"
+                        class="ml-auto p-2"
+                        aria-label="Close filters"
+                        @click="showFilters = false"
+                    >
+                        <X class="size-4" />
+                    </button>
+                </div>
+                <button
+                    v-for="box in mailboxes"
+                    :key="box.key"
+                    type="button"
+                    class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left"
+                    :class="
+                        mailbox === box.key && !address
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : ''
+                    "
+                    @click="
+                        showFilters = false;
+                        openMailbox(box.key);
+                    "
+                >
+                    <component :is="box.icon" class="size-4" />
+                    <span class="flex-1">{{ box.label }}</span>
+                    <span v-if="box.count" class="font-mono text-xs">{{
+                        box.count
+                    }}</span>
+                </button>
+                <p
+                    class="mt-4 px-3 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                >
+                    Assignment
+                </p>
+                <button
+                    v-for="entry in [
+                        { key: 'mine', label: 'Mine' },
+                        { key: 'unassigned', label: 'Unassigned' },
+                    ]"
+                    :key="entry.key"
+                    type="button"
+                    class="min-h-10 rounded-lg px-3 text-left"
+                    :class="
+                        filters.assigned === entry.key
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : ''
+                    "
+                    @click="
+                        showFilters = false;
+                        filterAssignment(entry.key);
+                    "
+                >
+                    {{ entry.label }}
+                </button>
+                <p
+                    class="mt-4 px-3 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                >
+                    Addresses
+                </p>
+                <button
+                    v-for="entry in addresses"
+                    :key="entry.address"
+                    type="button"
+                    class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left"
+                    :class="
+                        address === entry.address
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : ''
+                    "
+                    @click="
+                        showFilters = false;
+                        filterAddress(entry.address);
+                    "
+                >
+                    <AtSign class="size-4" />
+                    <span class="min-w-0 flex-1 truncate">{{
+                        entry.address
+                    }}</span>
+                    <span class="font-mono text-xs">{{ entry.count }}</span>
+                </button>
+            </aside>
+        </div>
+
+        <div
             v-if="showCompose"
             class="fixed inset-0 z-40 grid place-items-center bg-zinc-950/40 p-4 backdrop-blur-sm"
             @click.self="showCompose = false"
@@ -1241,6 +1587,22 @@ function participantSummary(thread: ThreadRow): string {
                         <X class="size-4" />
                     </button>
                 </div>
+                <label class="grid gap-1.5 text-sm">
+                    <span class="text-zinc-500">From</span>
+                    <select
+                        v-model="composeForm.from"
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                    >
+                        <option value="">Default sender</option>
+                        <option
+                            v-for="entry in addresses"
+                            :key="entry.address"
+                            :value="entry.address"
+                        >
+                            {{ entry.address }}
+                        </option>
+                    </select>
+                </label>
                 <label class="grid gap-1.5 text-sm">
                     <span class="text-zinc-500">To</span>
                     <input
@@ -1265,6 +1627,46 @@ function participantSummary(thread: ThreadRow): string {
                         class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
                     />
                 </label>
+                <label v-if="templates.length" class="grid gap-1.5 text-sm">
+                    <span class="text-zinc-500">Template</span>
+                    <select
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        @change="
+                            applyTemplate(
+                                ($event.target as HTMLSelectElement).value,
+                            )
+                        "
+                    >
+                        <option value="">Start from scratch</option>
+                        <option
+                            v-for="template in templates"
+                            :key="template.id"
+                            :value="template.id"
+                        >
+                            {{ template.name }}
+                        </option>
+                    </select>
+                </label>
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <label class="grid gap-1.5 text-sm">
+                        <span class="text-zinc-500">CC</span>
+                        <input
+                            v-model="composeForm.cc"
+                            type="text"
+                            placeholder="Comma-separated addresses"
+                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        />
+                    </label>
+                    <label class="grid gap-1.5 text-sm">
+                        <span class="text-zinc-500">BCC</span>
+                        <input
+                            v-model="composeForm.bcc"
+                            type="text"
+                            placeholder="Comma-separated addresses"
+                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        />
+                    </label>
+                </div>
                 <div class="grid gap-1.5 text-sm">
                     <span class="text-zinc-500">Message</span>
                     <RichTextEditor

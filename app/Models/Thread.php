@@ -22,7 +22,13 @@ class Thread extends Model
         'read_at',
         'archived_at',
         'snoozed_until',
+        'status',
+        'priority',
+        'assigned_to_user_id',
+        'tags',
     ];
+
+    protected $attributes = ['status' => 'open', 'priority' => 'normal'];
 
     protected function casts(): array
     {
@@ -32,6 +38,7 @@ class Thread extends Model
             'read_at' => 'datetime',
             'archived_at' => 'datetime',
             'snoozed_until' => 'datetime',
+            'tags' => 'array',
         ];
     }
 
@@ -58,6 +65,21 @@ class Thread extends Model
     public function notes(): HasMany
     {
         return $this->hasMany(ThreadNote::class);
+    }
+
+    public function assignedTo(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_to_user_id');
+    }
+
+    public function userStates(): HasMany
+    {
+        return $this->hasMany(ThreadUserState::class);
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(ThreadEvent::class);
     }
 
     /**

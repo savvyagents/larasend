@@ -3,6 +3,7 @@
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Thread;
+use App\Models\ThreadUserState;
 use App\Models\User;
 use App\Models\Workspace;
 use Illuminate\Support\Facades\Queue;
@@ -87,7 +88,7 @@ it('marks a thread read when opened explicitly', function () {
         ->get("/projects/{$project->slug}/inbox?thread={$thread->public_id}")
         ->assertInertia(fn ($page) => $page->where('selectedThread.unread', false));
 
-    expect($thread->fresh()->read_at)->not->toBeNull();
+    expect(ThreadUserState::query()->whereBelongsTo($thread)->whereBelongsTo($user)->value('read_at'))->not->toBeNull();
 });
 
 it('archives, restores, and toggles unread through thread actions', function () {
@@ -105,10 +106,39 @@ it('archives, restores, and toggles unread through thread actions', function () 
     expect($thread->fresh()->archived_at)->toBeNull();
 
     $this->actingAs($user)->post("/projects/{$project->slug}/threads/{$thread->public_id}/read");
-    expect($thread->fresh()->read_at)->not->toBeNull();
+    expect(ThreadUserState::query()->whereBelongsTo($thread)->whereBelongsTo($user)->value('read_at'))->not->toBeNull();
 
     $this->actingAs($user)->post("/projects/{$project->slug}/threads/{$thread->public_id}/unread");
-    expect($thread->fresh()->read_at)->toBeNull();
+    expect(ThreadUserState::query()->whereBelongsTo($thread)->whereBelongsTo($user)->value('read_at'))->toBeNull();
+});
+
+it('keeps read state personal while sharing assignment and workflow state', function () {
+    [$owner, $project, $source] = inboxFixture();
+    $member = User::factory()->create();
+    $project->workspace->users()->attach($member, ['role' => 'member']);
+    Queue::fake();
+    receiveThreadedEmail($this, $source, 'Team work', 'team-work@customer.test');
+    $thread = Thread::query()->firstOrFail();
+
+    $this->actingAs($owner)->get("/projects/{$project->slug}/inbox?thread={$thread->public_id}")->assertSuccessful();
+
+    $this->actingAs($member)
+        ->get("/projects/{$project->slug}/inbox?mailbox=unread")
+        ->assertInertia(fn ($page) => $page->has('threads', 1));
+
+    $this->actingAs($owner)
+        ->patch("/projects/{$project->slug}/threads/{$thread->public_id}/workflow", [
+            'status' => 'pending',
+            'priority' => 'high',
+            'assigned_to_user_id' => $member->id,
+        ])
+        ->assertRedirect();
+
+    expect($thread->fresh())
+        ->status->toBe('pending')
+        ->priority->toBe('high')
+        ->assigned_to_user_id->toBe($member->id)
+        ->and($thread->events()->where('type', 'workflow_updated')->exists())->toBeTrue();
 });
 
 it('filters mailboxes and blocks cross-project thread access', function () {
