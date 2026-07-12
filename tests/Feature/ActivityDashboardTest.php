@@ -5,6 +5,7 @@ use App\Models\Email;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Suppression;
+use App\Models\Thread;
 use App\Models\User;
 use App\Models\WebhookEndpoint;
 use App\Models\Workspace;
@@ -30,6 +31,7 @@ it('renders the activity dashboard for authenticated users', function () {
             ->component('Activity')
             ->has('project')
             ->has('metrics', 6)
+            ->has('recentThreads', 0)
             ->where('metrics', fn ($metrics) => collect($metrics)->every(fn (array $metric) => $metric['delta'] !== 'live'))
             ->has('suppressions', 2)
             ->where('quota.limit', null)
@@ -45,6 +47,68 @@ it('renders the activity dashboard for authenticated users', function () {
             ->where('emails.0.headers.X-Larasend-Test', 'true')
             ->where('emails.0.previewUrl', fn (string $url) => str_contains($url, '/emails/') && str_ends_with($url, '/preview'))
         );
+});
+
+it('renders recent active inbox conversations on the dashboard', function () {
+    $user = User::factory()->create();
+    $project = seedActivityDashboardData($user);
+
+    Thread::query()->create([
+        'public_id' => 'thread_recent',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'subject' => 'Need help with my receipt',
+        'subject_key' => 'need help with my receipt',
+        'participants' => ['maya@example.com'],
+        'last_direction' => 'inbound',
+        'last_snippet' => 'Could you send another copy?',
+        'message_count' => 2,
+        'last_activity_at' => now(),
+    ]);
+
+    Thread::query()->create([
+        'public_id' => 'thread_snoozed',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'subject' => 'Snoozed conversation',
+        'subject_key' => 'snoozed conversation',
+        'participants' => ['later@example.com'],
+        'last_direction' => 'inbound',
+        'last_snippet' => 'Handle this later.',
+        'message_count' => 1,
+        'last_activity_at' => now()->subMinute(),
+        'snoozed_until' => now()->addHour(),
+    ]);
+
+    $this->actingAs($user)
+        ->get('/activity')
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page
+            ->has('recentThreads', 1)
+            ->where('recentThreads.0.public_id', 'thread_recent')
+            ->where('recentThreads.0.subject', 'Need help with my receipt')
+            ->where('recentThreads.0.unread', true)
+            ->where('inboxUnread', 1)
+        );
+});
+
+it('renders every outbound delivery state in the outbound log', function () {
+    $user = User::factory()->create();
+    seedActivityDashboardData($user);
+
+    $this->actingAs($user)
+        ->get('/outbound')
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page
+            ->where('section', 'outbound')
+            ->has('emails', 12)
+            ->where('emails', fn ($emails) => collect($emails)->contains('status', 'bounced')
+                && collect($emails)->contains('status', 'complained'))
+        );
+
+    $this->actingAs($user)
+        ->get('/sent')
+        ->assertRedirect('/projects/my-project/outbound');
 });
 
 it('calculates activity metric deltas against the previous matching period', function () {

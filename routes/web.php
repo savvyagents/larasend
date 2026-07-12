@@ -75,12 +75,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->whereNumber('index')
             ->name('inbound.attachments');
         Route::get('{section}', ActivityController::class)
-            ->where('section', 'activity|sent|inbound|bounces|complaints|suppressions|source|identities|templates|webhooks|api-keys|send|setup|projects')
+            ->where('section', 'activity|outbound|sent|inbound|bounces|complaints|suppressions|source|identities|templates|webhooks|api-keys|send|setup|projects')
             ->name('section');
     });
 
     Route::get('activity', ActivityController::class)->defaults('section', 'activity')->name('activity');
     Route::get('activity/export', ActivityExportController::class)->name('activity.export');
+    Route::get('outbound', ActivityController::class)->defaults('section', 'outbound')->name('outbound');
     Route::get('sent', ActivityController::class)->defaults('section', 'sent')->name('sent');
     Route::get('inbound', ActivityController::class)->defaults('section', 'inbound')->name('inbound');
     Route::get('inbox', InboxController::class)->name('inbox');

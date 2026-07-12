@@ -213,7 +213,7 @@ it('uses the selected project for dashboard actions', function () {
 it('keeps configuration pages scoped to the selected project', function () {
     [$user, , $secondary] = projectSwitchingFixture();
 
-    foreach (['setup', 'source', 'identities', 'templates', 'webhooks', 'api-keys', 'projects'] as $section) {
+    foreach (['outbound', 'setup', 'source', 'identities', 'templates', 'webhooks', 'api-keys', 'projects'] as $section) {
         $this->actingAs($user)
             ->get("/projects/{$secondary->slug}/{$section}")
             ->assertSuccessful()

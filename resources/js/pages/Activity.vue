@@ -25,6 +25,7 @@ import {
     ref,
     watch,
 } from 'vue';
+import DashboardPanel from '@/components/DashboardPanel.vue';
 import EmailProviderPanel from '@/components/EmailProviderPanel.vue';
 import GlobalRail from '@/components/GlobalRail.vue';
 import { Toaster } from '@/components/ui/sonner';
@@ -207,6 +208,17 @@ const props = defineProps<{
     selectedEmail: EmailDetail | null;
     sidebarCounts: Record<string, number>;
     inboxUnread?: number;
+    recentThreads: {
+        public_id: string;
+        subject: string | null;
+        participants: string[];
+        snippet: string | null;
+        direction: string | null;
+        message_count: number;
+        unread: boolean;
+        last_activity_at: string | null;
+        last_activity_human: string | null;
+    }[];
     quota: {
         sent: number;
         limit: number | null;
@@ -610,8 +622,7 @@ const verifiedDomain = computed(() =>
 const showWorkerBanner = computed(
     () =>
         !props.system.worker_alive &&
-        (props.section === 'activity' ||
-            props.section === 'send' ||
+        (props.section === 'send' ||
             (props.system.stuck_queued > 0 && isMailSection.value)),
 );
 const complaintRate = computed(
@@ -674,7 +685,10 @@ function relativeTime(value: string | null): string {
 }
 
 const isMailSection = computed(() =>
-    ['activity', 'sent', 'bounces', 'complaints'].includes(props.section),
+    ['outbound', 'sent', 'bounces', 'complaints'].includes(props.section),
+);
+const showRangeControls = computed(
+    () => props.section === 'activity' || isMailSection.value,
 );
 
 usePoll(
@@ -765,9 +779,6 @@ watch(
     () => props.section,
     () => syncQuotaIfStale(),
 );
-const showMetrics = computed(() =>
-    ['activity', 'sent'].includes(props.section),
-);
 const softBounceCount = computed(
     () => props.bounceQueue.filter((bounce) => bounce.type === 'Soft').length,
 );
@@ -839,9 +850,10 @@ function enableInbound(domainId: number): void {
 const pageTitle = computed(() => {
     return (
         {
-            activity: 'Overview',
-            sent: 'Sent',
-            inbound: 'Inbound',
+            activity: 'Dashboard',
+            outbound: 'Outbound',
+            sent: 'Outbound',
+            inbound: 'Inbound log',
             bounces: 'Bounces',
             complaints: 'Complaints',
             suppressions: 'Suppressions',
@@ -1749,7 +1761,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                         />live
                     </span>
                     <div
-                        v-if="isMailSection"
+                        v-if="showRangeControls"
                         class="ml-auto hidden rounded-lg border border-zinc-200 bg-white p-0.5 text-xs md:flex dark:border-[#1d2125] dark:bg-[#111315]"
                     >
                         <button
@@ -1773,49 +1785,23 @@ function recipientTitle(email: EmailRow): string | undefined {
                     >
                 </section>
 
-                <section
-                    v-if="showMetrics"
-                    class="grid shrink-0 grid-cols-2 border-b border-zinc-200 sm:grid-cols-3 xl:grid-cols-6 dark:border-[#1d2125]"
+                <div
+                    v-if="section === 'activity'"
+                    class="min-h-0 flex-1 overflow-auto p-5"
                 >
-                    <div
-                        v-for="metric in metrics"
-                        :key="metric.label"
-                        class="min-h-[68px] min-w-0 border-r border-b border-zinc-200 px-4 py-3 last:border-r-0 hover:bg-zinc-100 xl:border-b-0 dark:border-[#1d2125] dark:hover:bg-[#111315]"
-                    >
-                        <div
-                            class="truncate font-mono text-[10px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                        >
-                            {{ metric.label }}
-                        </div>
-                        <div
-                            class="mt-1.5 font-sans text-xl leading-none font-semibold tracking-tight text-zinc-950 dark:text-[#e9eaec]"
-                        >
-                            {{ metric.value }}
-                        </div>
-                        <div
-                            v-if="metric.delta"
-                            class="mt-1 inline-flex max-w-full items-center gap-1 truncate font-mono text-[10px]"
-                            :class="{
-                                'text-emerald-400': metric.tone === 'good',
-                                'text-red-400': metric.tone === 'bad',
-                                'text-zinc-500 dark:text-[#6c7177]':
-                                    metric.tone === 'neutral',
-                            }"
-                        >
-                            <span>{{
-                                metric.trend === 'up'
-                                    ? '▲'
-                                    : metric.trend === 'down'
-                                      ? '▼'
-                                      : '•'
-                            }}</span>
-                            {{ metric.delta }}
-                        </div>
-                    </div>
-                </section>
+                    <DashboardPanel
+                        :project-slug="project.slug"
+                        :metrics="metrics"
+                        :emails="emails"
+                        :recent-threads="recentThreads"
+                        :inbox-unread="inboxUnread ?? 0"
+                        :source-ready="Boolean(source?.can_send)"
+                        :system="system"
+                    />
+                </div>
 
                 <div
-                    v-if="section === 'bounces'"
+                    v-else-if="section === 'bounces'"
                     class="min-h-0 flex-1 overflow-auto px-4 py-3"
                 >
                     <section
@@ -1901,7 +1887,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 <Link
                                     v-for="bounce in bounceQueue"
                                     :key="bounce.id"
-                                    :href="`${sectionHref('activity')}?q=${encodeURIComponent(bounce.id)}`"
+                                    :href="`${sectionHref('outbound')}?q=${encodeURIComponent(bounce.id)}`"
                                     class="grid min-w-[1080px] grid-cols-[96px_minmax(220px,1fr)_minmax(260px,1.25fr)_130px_minmax(180px,.8fr)_minmax(190px,.9fr)_100px_100px_42px] items-center border-b border-zinc-200 px-3 py-2.5 font-sans text-sm last:border-b-0 hover:bg-zinc-50 dark:border-zinc-900 dark:hover:bg-zinc-950"
                                 >
                                     <span>

@@ -7,6 +7,7 @@ use App\Models\Email;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Suppression;
+use App\Models\Thread;
 use App\Models\User;
 use App\Models\WebhookDelivery;
 use App\Models\WebhookEndpoint;
@@ -43,6 +44,10 @@ class ActivityController extends Controller
         $source = $context->currentSource($project);
 
         $section = (string) $request->route('section', 'activity');
+
+        if ($section === 'sent') {
+            return redirect($context->sectionPath($project, 'outbound'));
+        }
 
         if ($section === 'send' && (! $source || ! $this->canSend($project, $source))) {
             $label = ($source?->provider ?? SourceProvider::Ses)->label();
@@ -165,7 +170,24 @@ class ActivityController extends Controller
                 'complaints' => $project->emails()->where('status', 'complained')->count(),
                 'suppressions' => $project->suppressions()->count(),
             ],
-            'inboxUnread' => $project->threads()->whereNull('archived_at')->whereNull('read_at')->count(),
+            'inboxUnread' => $this->activeInboxThreads($project)->whereNull('read_at')->count(),
+            'recentThreads' => $section === 'activity'
+                ? $this->activeInboxThreads($project)
+                    ->orderByDesc('last_activity_at')
+                    ->limit(5)
+                    ->get([
+                        'public_id',
+                        'subject',
+                        'participants',
+                        'last_snippet',
+                        'last_direction',
+                        'message_count',
+                        'read_at',
+                        'last_activity_at',
+                    ])
+                    ->map(fn (Thread $thread): array => $this->serializeThreadSummary($thread))
+                    ->values()
+                : [],
             'quota' => $this->quota($project, $source),
             'system' => [
                 'worker_alive' => $this->systemHealth->workerIsAlive(),
@@ -381,6 +403,34 @@ class ActivityController extends Controller
         }
 
         return $query;
+    }
+
+    private function activeInboxThreads(Project $project): HasMany
+    {
+        return $project->threads()
+            ->whereNull('archived_at')
+            ->where(function ($query): void {
+                $query->whereNull('snoozed_until')
+                    ->orWhere('snoozed_until', '<=', now());
+            });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeThreadSummary(Thread $thread): array
+    {
+        return [
+            'public_id' => $thread->public_id,
+            'subject' => $thread->subject,
+            'participants' => $thread->participants ?? [],
+            'snippet' => $thread->last_snippet,
+            'direction' => $thread->last_direction,
+            'message_count' => $thread->message_count,
+            'unread' => $thread->read_at === null,
+            'last_activity_at' => $thread->last_activity_at?->toIso8601String(),
+            'last_activity_human' => $thread->last_activity_at?->diffForHumans(short: true),
+        ];
     }
 
     /**

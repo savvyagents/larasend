@@ -10,7 +10,6 @@ import {
     Inbox,
     KeyRound,
     LayoutDashboard,
-    Send,
     Settings2,
     SlidersHorizontal,
     Users,
@@ -64,10 +63,10 @@ const userInitials = computed(() =>
 
 const navigationGroups = computed(() => [
     {
-        label: 'Overview',
+        label: 'Home',
         items: [
             {
-                label: 'Overview',
+                label: 'Dashboard',
                 section: 'activity',
                 href: `${props.projectPath}/activity`,
                 icon: LayoutDashboard,
@@ -80,24 +79,17 @@ const navigationGroups = computed(() => [
                 icon: Inbox,
                 count: props.inboxUnread || null,
             },
-            {
-                label: 'Send email',
-                section: 'send',
-                href: `${props.projectPath}/send`,
-                icon: Send,
-                count: null,
-            },
         ],
     },
     {
-        label: 'Sending',
+        label: 'Messages',
         items: [
             {
-                label: 'Sent mail',
-                section: 'sent',
-                href: `${props.projectPath}/sent`,
+                label: 'Outbound',
+                section: 'outbound',
+                href: `${props.projectPath}/outbound`,
                 icon: Activity,
-                count: props.counts.sent ?? null,
+                count: props.counts.activity ?? null,
             },
             {
                 label: 'Templates',
@@ -138,7 +130,7 @@ const navigationGroups = computed(() => [
         label: 'Developer',
         items: [
             {
-                label: 'Inbound events',
+                label: 'Inbound log',
                 section: 'inbound',
                 href: `${props.projectPath}/inbound`,
                 icon: Activity,
@@ -191,7 +183,7 @@ const navigationGroups = computed(() => [
 const mobileItems = computed(() => [
     navigationGroups.value[0].items[0],
     navigationGroups.value[0].items[1],
-    navigationGroups.value[0].items[2],
+    navigationGroups.value[1].items[0],
     {
         ...navigationGroups.value[2].items[0],
         label: 'Delivery',
