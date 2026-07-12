@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage, usePoll } from '@inertiajs/vue3';
 import {
-    Activity as ActivityIcon,
     AlertTriangle,
     Archive,
     ArrowUpRight,
     Check,
     Cloud,
     Copy,
-    FileText,
+    Inbox,
     KeyRound,
-    MailCheck,
     Pencil,
-    Power,
     RefreshCw,
     Search,
     Send,
@@ -28,8 +25,10 @@ import {
     ref,
     watch,
 } from 'vue';
-import AppLogoIcon from '@/components/AppLogoIcon.vue';
-import { getInitials } from '@/composables/useInitials';
+import DashboardPanel from '@/components/DashboardPanel.vue';
+import EmailProviderPanel from '@/components/EmailProviderPanel.vue';
+import GlobalRail from '@/components/GlobalRail.vue';
+import { Toaster } from '@/components/ui/sonner';
 
 type Metric = {
     label: string;
@@ -147,8 +146,6 @@ type ArchivedProjectOption = Omit<
     archived_at: string | null;
 };
 
-type HealthTone = 'success' | 'warning' | 'neutral';
-
 type NewWebhookEndpoint = {
     id: string;
     url: string;
@@ -210,6 +207,18 @@ const props = defineProps<{
     emails: EmailRow[];
     selectedEmail: EmailDetail | null;
     sidebarCounts: Record<string, number>;
+    inboxUnread?: number;
+    recentThreads: {
+        public_id: string;
+        subject: string | null;
+        participants: string[];
+        snippet: string | null;
+        direction: string | null;
+        message_count: number;
+        unread: boolean;
+        last_activity_at: string | null;
+        last_activity_human: string | null;
+    }[];
     quota: {
         sent: number;
         limit: number | null;
@@ -255,6 +264,24 @@ const props = defineProps<{
             | { type: string; name: string; value: string; status?: string }[]
             | null;
         verified_at: string | null;
+        inbound_enabled_at: string | null;
+    }[];
+    inboundEmails: {
+        public_id: string;
+        from_email: string;
+        from_name: string | null;
+        to_email: string;
+        subject: string | null;
+        text: string | null;
+        html: string | null;
+        attachments:
+            | {
+                  filename: string | null;
+                  content_type: string | null;
+                  size: number;
+              }[]
+            | null;
+        received_at: string;
     }[];
     templates: {
         slug: string;
@@ -283,6 +310,7 @@ const props = defineProps<{
         created_at: string;
     }[];
     newApiKey: string | null;
+    inboundError: string | null;
     setup: {
         webhook_url: string | null;
         next_step: {
@@ -305,9 +333,6 @@ const props = defineProps<{
 }>();
 
 const page = usePage();
-const userInitials = computed(
-    () => getInitials(page.props.auth.user?.name) || 'U',
-);
 const buildLabel = computed(() => {
     const build = page.props.build as
         | { version?: string | null; sha?: string | null }
@@ -317,7 +342,7 @@ const buildLabel = computed(() => {
 
     return sha ? `v${version} · ${sha}` : `v${version}`;
 });
-const selected = ref<Partial<EmailDetail> | null>(props.selectedEmail);
+const selected = ref<Partial<EmailDetail> | null>(null);
 const activeTab = ref<'timeline' | 'preview' | 'headers' | 'metrics'>(
     'preview',
 );
@@ -336,11 +361,9 @@ const selectedFilter = ref('All');
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const selectedRange = ref(props.filters.range || '14d');
-const showProjectMenu = ref(false);
 const showProjectForm = ref(false);
 const selectedIdentityDomain = ref(props.domains[0]?.domain ?? '');
 const showNewIdentity = ref(false);
-const showSourceSettings = ref(false);
 const revealedApiKey = ref(props.newApiKey);
 const apiKeyCopied = ref(false);
 const showWebhookForm = ref(false);
@@ -352,6 +375,9 @@ const checkingDomainId = ref<number | null>(null);
 const deletingDomainId = ref<number | null>(null);
 const copiedDnsKey = ref<string | null>(null);
 const inspectorWidth = ref(600);
+const mailLayoutStyle = computed<Record<string, string>>(() => ({
+    '--inspector-width': `${inspectorWidth.value}px`,
+}));
 const isResizingInspector = ref(false);
 const editingProjectSlug = ref<string | null>(null);
 const archivingProjectSlug = ref<string | null>(null);
@@ -365,22 +391,7 @@ let copiedDnsTimer: ReturnType<typeof window.setTimeout> | null = null;
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 let resizeStartX = 0;
 let resizeStartWidth = 0;
-const sourceForm = reactive({
-    name: props.source?.name ?? 'Production',
-    environment: props.source?.environment ?? props.project.environment,
-    provider: (props.source?.provider ?? 'ses') as SourceProvider,
-    ses_region: props.source?.ses_region ?? props.project.region ?? 'us-east-1',
-    ses_configuration_set: props.source?.ses_configuration_set ?? '',
-    cloudflare_account_id: props.source?.cloudflare_account_id ?? '',
-    cloudflare_api_token: '',
-    default_from_name: props.source?.default_from_name ?? 'Larasend',
-    default_from_email: props.source?.default_from_email ?? '',
-    aws_access_key_id: '',
-    aws_secret_access_key: '',
-    aws_session_token: '',
-    retention_days: props.source?.retention_days ?? 90,
-});
-const domainForm = reactive({ domain: '' });
+const domainForm = useForm({ domain: '' });
 const templateForm = reactive({
     slug: '',
     name: '',
@@ -401,6 +412,7 @@ const webhookEventOptions = [
     'open',
     'click',
     'suppress',
+    'inbound.received',
 ];
 const webhookForm = reactive({
     url: '',
@@ -583,60 +595,10 @@ const templateStats = computed(() => [
     },
 ]);
 
-const quotaPercent = computed(() =>
-    props.quota.limit
-        ? Math.min(
-              100,
-              Math.round((props.quota.sent / props.quota.limit) * 100),
-          )
-        : 0,
-);
-const hasProviderQuota = computed(() => Boolean(props.quota.limit));
 const isCloudflare = computed(() => props.source?.provider === 'cloudflare');
 const providerLabel = computed(
     () => props.source?.provider_label ?? 'Amazon SES',
 );
-const cloudflareTokenUrl = computed(() => {
-    // Email Sending Edit to send, Zone Read + DNS Edit so Larasend can
-    // onboard sending domains and publish their records automatically.
-    const permissions = encodeURIComponent(
-        JSON.stringify([
-            { key: 'email_sending', type: 'edit' },
-            { key: 'zone', type: 'read' },
-            { key: 'dns', type: 'edit' },
-        ]),
-    );
-
-    return `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${permissions}&name=Larasend%20Email%20Sending`;
-});
-const quotaTitle = computed(() =>
-    hasProviderQuota.value
-        ? isCloudflare.value
-            ? 'Cloudflare daily quota'
-            : 'SES 24h quota'
-        : 'Stored sends',
-);
-const quotaStatus = computed(() => {
-    if (!props.source) {
-        return 'source missing';
-    }
-
-    if (props.quota.checkedAt) {
-        return `last synced ${relativeTime(props.quota.checkedAt)}`;
-    }
-
-    return 'sync required';
-});
-const quotaDetail = computed(() => {
-    if (!props.quota.limit) {
-        return 'Provider quota not synced yet.';
-    }
-
-    const used = props.quota.sentLast24Hours ?? 0;
-    const rate = props.quota.rate ? `${props.quota.rate}/s` : 'rate unknown';
-
-    return `${used.toLocaleString()} used in the last 24h · ${rate}`;
-});
 const quotaIsStale = computed(() => {
     if (!props.source) {
         return false;
@@ -657,132 +619,11 @@ const verifiedDomain = computed(() =>
         ['verified', 'local'].includes(domain.status),
     ),
 );
-const activeWebhookCount = computed(
-    () =>
-        props.webhooks.filter(
-            (webhook) => webhook.configured_status !== 'paused',
-        ).length,
-);
-const credentialMode = computed(() => {
-    if (!props.source) {
-        return 'Not configured';
-    }
-
-    if (props.source.provider === 'cloudflare') {
-        return props.source.has_cloudflare_credentials
-            ? 'Cloudflare API token'
-            : 'Missing API token';
-    }
-
-    if (props.source.uses_instance_role) {
-        return 'EC2 instance role';
-    }
-
-    if (props.source.has_aws_credentials) {
-        return props.source.has_aws_session_token
-            ? 'STS credentials'
-            : 'Stored IAM keys';
-    }
-
-    return 'Missing credentials';
-});
-const hasCredentials = computed(() =>
-    isCloudflare.value
-        ? Boolean(props.source?.has_cloudflare_credentials)
-        : Boolean(
-              props.source?.has_aws_credentials ||
-              props.source?.uses_instance_role,
-          ),
-);
-const setupWebhookStep = computed(() =>
-    props.setup.steps.find((step) => step.key === 'webhook'),
-);
-const setupHealthCards = computed<
-    { label: string; value: string; meta: string; tone: HealthTone }[]
->(() => [
-    {
-        label: 'Credentials',
-        value: credentialMode.value,
-        meta: props.source?.default_from_email
-            ? props.source.default_from_email
-            : 'Default sender missing',
-        tone: hasCredentials.value ? 'success' : 'warning',
-    },
-    {
-        label: 'Domain',
-        value: verifiedDomain.value?.domain ?? 'Not verified',
-        meta: verifiedDomain.value
-            ? `${props.project.region ?? providerLabel.value} verified`
-            : `${props.domains.length.toLocaleString()} configured`,
-        tone: verifiedDomain.value ? 'success' : 'warning',
-    },
-    {
-        label: 'Quota',
-        value: props.quota.limit
-            ? `${props.quota.limit.toLocaleString()} / ${isCloudflare.value ? 'day' : '24h'}`
-            : syncingQuota.value
-              ? 'Syncing'
-              : 'Needs sync',
-        meta: props.quota.rate
-            ? `${props.quota.rate}/s send rate`
-            : quotaStatus.value,
-        tone: props.quota.limit ? 'success' : 'warning',
-    },
-    isCloudflare.value
-        ? {
-              label: 'Events',
-              value: 'Suppression sync',
-              meta: 'Cloudflare has no event webhooks; suppressions sync hourly',
-              tone: 'neutral' as HealthTone,
-          }
-        : {
-              label: 'Events',
-              value: setupWebhookStep.value?.complete
-                  ? 'Events received'
-                  : props.sesWebhookUrl
-                    ? 'Webhook URL ready'
-                    : 'Source missing',
-              meta: activeWebhookCount.value
-                  ? `${activeWebhookCount.value.toLocaleString()} outbound active`
-                  : (setupWebhookStep.value?.status ?? 'Waiting for SES event'),
-              tone: setupWebhookStep.value?.complete
-                  ? 'success'
-                  : props.sesWebhookUrl
-                    ? 'warning'
-                    : 'neutral',
-          },
-    {
-        label: 'API keys',
-        value: props.apiKeys.length
-            ? props.apiKeys.length.toLocaleString()
-            : 'None',
-        meta: props.apiKeys.some((key) => key.last_used_at)
-            ? 'Has recent usage'
-            : 'No usage yet',
-        tone: props.apiKeys.length ? 'success' : 'neutral',
-    },
-    {
-        label: 'Queue worker',
-        value: props.system.worker_alive ? 'Running' : 'Not detected',
-        meta: props.system.worker_alive
-            ? `last seen ${props.system.worker_last_seen}`
-            : 'Emails will not send. Run: php artisan queue:work',
-        tone: props.system.worker_alive ? 'success' : 'warning',
-    },
-    {
-        label: 'Scheduler',
-        value: props.system.scheduler_alive ? 'Running' : 'Not detected',
-        meta: props.system.scheduler_alive
-            ? `last ran ${props.system.scheduler_last_seen}`
-            : 'DNS checks, quota, and suppressions will not refresh',
-        tone: props.system.scheduler_alive ? 'success' : 'warning',
-    },
-]);
 const showWorkerBanner = computed(
     () =>
         !props.system.worker_alive &&
-        props.system.stuck_queued > 0 &&
-        (isMailSection.value || props.section === 'send'),
+        (props.section === 'send' ||
+            (props.system.stuck_queued > 0 && isMailSection.value)),
 );
 const complaintRate = computed(
     () =>
@@ -843,85 +684,11 @@ function relativeTime(value: string | null): string {
     return `${Math.round(hours / 24)}d ago`;
 }
 
-const navItems = computed(() => [
-    {
-        label: 'Activity',
-        section: 'activity',
-        href: sectionHref('activity'),
-        icon: ActivityIcon,
-        count: props.sidebarCounts.activity,
-    },
-    {
-        label: 'Sent',
-        section: 'sent',
-        href: sectionHref('sent'),
-        icon: Send,
-        count: props.sidebarCounts.sent,
-    },
-    {
-        label: 'Bounces',
-        section: 'bounces',
-        href: sectionHref('bounces'),
-        icon: ActivityIcon,
-        count: props.sidebarCounts.bounces,
-    },
-    {
-        label: 'Complaints',
-        section: 'complaints',
-        href: sectionHref('complaints'),
-        icon: AlertTriangle,
-        count: props.sidebarCounts.complaints,
-    },
-    {
-        label: 'Suppressions',
-        section: 'suppressions',
-        href: sectionHref('suppressions'),
-        icon: Power,
-        count: props.sidebarCounts.suppressions,
-    },
-]);
-
-const configItems = computed(() => [
-    {
-        label: 'Workspace',
-        section: 'projects',
-        href: sectionHref('projects'),
-        icon: Cloud,
-    },
-    {
-        label: 'Sending source',
-        section: 'setup',
-        href: sectionHref('setup'),
-        icon: SlidersHorizontal,
-    },
-    {
-        label: 'Domains',
-        section: 'identities',
-        href: sectionHref('identities'),
-        icon: MailCheck,
-    },
-    {
-        label: 'Templates',
-        section: 'templates',
-        href: sectionHref('templates'),
-        icon: FileText,
-    },
-    {
-        label: 'Webhooks',
-        section: 'webhooks',
-        href: sectionHref('webhooks'),
-        icon: Cloud,
-    },
-    {
-        label: 'API keys',
-        section: 'api-keys',
-        href: sectionHref('api-keys'),
-        icon: KeyRound,
-    },
-]);
-
 const isMailSection = computed(() =>
-    ['activity', 'sent', 'bounces', 'complaints'].includes(props.section),
+    ['outbound', 'sent', 'bounces', 'complaints'].includes(props.section),
+);
+const showRangeControls = computed(
+    () => props.section === 'activity' || isMailSection.value,
 );
 
 usePoll(
@@ -1012,9 +779,6 @@ watch(
     () => props.section,
     () => syncQuotaIfStale(),
 );
-const showMetrics = computed(() =>
-    ['activity', 'sent'].includes(props.section),
-);
 const softBounceCount = computed(
     () => props.bounceQueue.filter((bounce) => bounce.type === 'Soft').length,
 );
@@ -1058,15 +822,43 @@ const identityStats = computed(() => {
         },
     ];
 });
+const selectedInboundId = ref<string | null>(null);
+const selectedInbound = computed(
+    () =>
+        props.inboundEmails.find(
+            (email) => email.public_id === selectedInboundId.value,
+        ) ??
+        props.inboundEmails[0] ??
+        null,
+);
+const enablingInboundDomainId = ref<number | null>(null);
+
+function enableInbound(domainId: number): void {
+    enablingInboundDomainId.value = domainId;
+    router.post(
+        projectAction(`/domains/${domainId}/inbound`),
+        {},
+        {
+            preserveScroll: true,
+            onFinish: () => {
+                enablingInboundDomainId.value = null;
+            },
+        },
+    );
+}
+
 const pageTitle = computed(() => {
     return (
         {
-            activity: 'Activity',
-            sent: 'Sent',
+            activity: 'Dashboard',
+            outbound: 'Outbound',
+            sent: 'Outbound',
+            inbound: 'Inbound log',
             bounces: 'Bounces',
             complaints: 'Complaints',
             suppressions: 'Suppressions',
-            setup: 'Sending source',
+            source: 'Email provider',
+            setup: 'Project setup',
             identities: 'Domains',
             templates: 'Templates',
             webhooks: 'Webhooks',
@@ -1076,10 +868,6 @@ const pageTitle = computed(() => {
         }[props.section] ?? props.section.replace('-', ' ')
     );
 });
-function saveSource(): void {
-    router.put(projectAction('/source'), sourceForm, { preserveScroll: true });
-}
-
 function syncQuota(silent = false): void {
     syncingQuota.value = true;
 
@@ -1098,7 +886,7 @@ function syncQuota(silent = false): void {
 
 function syncQuotaIfStale(): void {
     if (
-        props.section !== 'setup' ||
+        props.section !== 'source' ||
         attemptedAutoQuotaSync.value ||
         syncingQuota.value ||
         !quotaIsStale.value
@@ -1110,12 +898,23 @@ function syncQuotaIfStale(): void {
     syncQuota(true);
 }
 
+function normalizeIdentityDomain(value: string): string {
+    const identity = value.trim();
+    const domain = identity.includes('@')
+        ? identity.slice(identity.lastIndexOf('@') + 1)
+        : identity;
+
+    return domain.replace(/^[<\s]+|[>\s.,;]+$/g, '').toLowerCase();
+}
+
 function addDomain(): void {
-    router.post(projectAction('/domains'), domainForm, {
+    domainForm.domain = normalizeIdentityDomain(domainForm.domain);
+
+    domainForm.post(projectAction('/domains'), {
         preserveScroll: true,
         onSuccess: () => {
             selectedIdentityDomain.value = domainForm.domain;
-            domainForm.domain = '';
+            domainForm.reset();
             showNewIdentity.value = false;
         },
     });
@@ -1421,7 +1220,6 @@ function createProject(): void {
             projectForm.name = '';
             projectForm.slug = '';
             showProjectForm.value = false;
-            showProjectMenu.value = false;
         },
     });
 }
@@ -1444,7 +1242,6 @@ function updateProject(project: ProjectOption): void {
         preserveScroll: true,
         onSuccess: () => {
             editingProjectSlug.value = null;
-            showProjectMenu.value = false;
         },
     });
 }
@@ -1719,16 +1516,6 @@ function dotClass(status: string): string {
     );
 }
 
-function healthToneClass(tone: HealthTone): string {
-    return (
-        {
-            success: 'bg-emerald-400',
-            warning: 'bg-amber-400',
-            neutral: 'bg-zinc-400',
-        }[tone] ?? 'bg-zinc-400'
-    );
-}
-
 function eventToneClass(type: string): string {
     return (
         {
@@ -1845,126 +1632,42 @@ function recipientTitle(email: EmailRow): string | undefined {
 </script>
 
 <template>
-    <Head :title="section.replace('-', ' ')" />
+    <Head :title="pageTitle" />
 
     <div
-        class="h-screen overflow-hidden bg-[#fbfaf7] font-sans text-[13px] text-zinc-900 antialiased dark:bg-[#0b0c0d] dark:text-[#e9eaec]"
+        class="h-screen overflow-hidden bg-[#fbfaf7] pb-16 font-sans text-sm text-zinc-900 antialiased lg:pb-0 dark:bg-[#0b0c0d] dark:text-[#e9eaec]"
     >
         <div
-            class="grid h-screen min-h-0 grid-cols-[224px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]"
+            class="grid h-full min-h-0 grid-cols-1 grid-rows-[60px_minmax(0,1fr)] lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[64px_minmax(0,1fr)]"
         >
+            <GlobalRail
+                :project-path="projectBasePath"
+                :project-name="project.name"
+                :project-slug="project.slug"
+                :section="section"
+                :projects="projects"
+                :counts="sidebarCounts"
+                :inbox-unread="inboxUnread"
+                :build-label="buildLabel"
+            />
             <header
-                class="col-span-2 flex h-[52px] shrink-0 items-center gap-3 border-b border-zinc-200 bg-[#fbfaf7] px-3.5 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                class="col-start-1 row-start-1 flex min-w-0 items-center gap-2 border-b border-zinc-200 bg-[#fbfaf7] px-3 sm:gap-3 sm:px-4 lg:col-start-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
             >
-                <div
-                    class="flex h-full w-[210px] items-center gap-2 border-r border-zinc-200 pr-3 dark:border-[#1d2125]"
-                >
+                <div class="flex min-w-0 items-center gap-2.5 lg:hidden">
                     <Link
-                        :href="sectionHref('activity')"
-                        class="grid size-[22px] place-items-center rounded-md bg-teal-300 text-[#0b0c0d]"
+                        href="/dashboard"
+                        class="grid size-8 shrink-0 place-items-center rounded-lg bg-teal-300 font-mono text-xs font-bold text-[#07221c]"
                     >
-                        <AppLogoIcon class="size-[17px]" />
+                        L
                     </Link>
-                    <Link
-                        :href="sectionHref('activity')"
-                        class="font-sans text-sm font-semibold tracking-tight"
-                        >larasend</Link
-                    >
-                </div>
-
-                <div
-                    class="relative flex items-center gap-2 font-sans text-[12.5px] text-zinc-500 dark:text-[#9aa0a6]"
-                >
-                    <Link
-                        :href="sectionHref('projects')"
-                        class="hover:text-zinc-950 dark:hover:text-zinc-100"
-                        >Projects</Link
-                    >
-                    <span class="text-zinc-400 dark:text-[#4a4f55]">/</span>
-                    <button
-                        type="button"
-                        class="rounded px-1 py-0.5 font-medium text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                        @click="showProjectMenu = !showProjectMenu"
-                    >
-                        {{ project.slug }}
-                    </button>
-                    <span class="text-zinc-400 dark:text-[#4a4f55]">/</span>
-                    <span
-                        class="font-medium text-zinc-950 capitalize dark:text-zinc-100"
-                    >
-                        {{ section.replace('-', ' ') }}
+                    <span class="min-w-0 truncate text-sm font-semibold">
+                        {{ project.name }}
                     </span>
-
-                    <div
-                        v-if="showProjectMenu"
-                        class="absolute top-8 left-14 z-40 w-[310px] overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl shadow-zinc-950/10 dark:border-[#1d2125] dark:bg-[#111315]"
-                    >
-                        <div
-                            class="border-b border-zinc-200 px-3 py-2 dark:border-[#1d2125]"
-                        >
-                            <div
-                                class="text-[11px] font-semibold tracking-widest text-zinc-500 uppercase"
-                            >
-                                {{ workspace.name }}
-                            </div>
-                            <div class="mt-1 text-xs text-zinc-500">
-                                Switch project or create a new isolated sending
-                                workspace.
-                            </div>
-                        </div>
-                        <div class="max-h-[260px] overflow-auto p-1">
-                            <Link
-                                v-for="item in projects"
-                                :key="item.slug"
-                                :href="item.href"
-                                class="grid grid-cols-[1fr_auto] gap-3 rounded-md px-2.5 py-2 hover:bg-zinc-100 dark:hover:bg-[#1a1e22]"
-                                :class="{
-                                    'bg-zinc-100 dark:bg-[#1a1e22]':
-                                        item.is_current,
-                                }"
-                            >
-                                <span class="min-w-0">
-                                    <span
-                                        class="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                                        >{{ item.name }}</span
-                                    >
-                                    <span
-                                        class="mt-0.5 block truncate font-mono text-[11px] text-zinc-500"
-                                        >{{ item.slug }} ·
-                                        {{ item.environment }} ·
-                                        {{
-                                            item.region ?? item.provider_label
-                                        }}</span
-                                    >
-                                </span>
-                                <span
-                                    class="text-right font-mono text-[11px] text-zinc-500"
-                                >
-                                    {{ item.emails_count }} sends<br />
-                                    {{ item.domains_count }} domains
-                                </span>
-                            </Link>
-                        </div>
-                        <div
-                            class="border-t border-zinc-200 p-2 dark:border-[#1d2125]"
-                        >
-                            <button
-                                type="button"
-                                class="w-full rounded-md border border-zinc-200 px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-200 dark:hover:bg-[#1a1e22]"
-                                @click="
-                                    showProjectForm = true;
-                                    showProjectMenu = false;
-                                "
-                            >
-                                + New project
-                            </button>
-                        </div>
-                    </div>
                 </div>
 
                 <form
                     v-if="isMailSection"
-                    class="ml-auto flex h-8 w-[min(380px,30vw)] items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12.5px] text-zinc-500 dark:border-[#1d2125] dark:bg-[#111315] dark:text-[#9aa0a6]"
+                    class="ml-auto hidden h-9 w-[min(420px,34vw)] items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-500 sm:flex dark:border-[#1d2125] dark:bg-[#111315] dark:text-[#9aa0a6]"
                     @submit.prevent="applySearch"
                 >
                     <Search class="size-3.5" />
@@ -1989,156 +1692,22 @@ function recipientTitle(email: EmailRow): string | undefined {
                     <RefreshCw class="size-3.5" />
                 </Link>
                 <Link
-                    v-else
+                    v-else-if="section !== 'setup'"
                     :href="sectionHref('setup')"
-                    class="inline-flex h-8 items-center rounded-md border border-zinc-200 bg-white px-3 font-sans text-[12.5px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-[#1d2125] dark:bg-[#111315] dark:text-zinc-200 dark:hover:bg-[#16191c]"
+                    class="hidden h-9 items-center rounded-lg border border-zinc-200 bg-white px-3 font-sans text-[13px] font-medium text-zinc-700 hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:bg-[#111315] dark:text-zinc-200 dark:hover:bg-[#16191c]"
                 >
-                    Setup guide
+                    Project setup
                 </Link>
                 <Link
                     :href="sectionHref('send')"
-                    class="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-300 px-3 font-sans text-[12.5px] font-semibold text-[#07221c] hover:brightness-105"
+                    class="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-300 px-3 font-sans text-[13px] font-semibold text-[#07221c] hover:brightness-105"
                 >
                     <Send class="size-3.5" /> Send
                 </Link>
-                <Link
-                    href="/settings/profile"
-                    class="grid size-[26px] place-items-center rounded-full bg-gradient-to-br from-violet-300 to-teal-300 font-mono text-[11px] font-semibold text-[#0b0c0d]"
-                    :title="`${page.props.auth.user.name} · ${page.props.auth.user.email}`"
-                    >{{ userInitials }}</Link
-                >
             </header>
 
-            <aside
-                class="relative row-start-2 flex min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] px-2 py-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
-            >
-                <div class="min-h-0 flex-1 overflow-y-auto pb-28">
-                    <div
-                        class="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                    >
-                        Mail
-                    </div>
-                    <nav class="space-y-0.5">
-                        <Link
-                            v-for="item in navItems"
-                            :key="item.label"
-                            :href="item.href"
-                            class="group relative flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left font-sans text-[12.5px] text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                            :class="{
-                                'bg-zinc-200/70 font-medium text-zinc-950 before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-r before:bg-teal-300 dark:bg-[#1a1e22] dark:text-zinc-100':
-                                    props.section === item.section,
-                            }"
-                        >
-                            <component :is="item.icon" class="size-3.5" />
-                            <span class="truncate">{{ item.label }}</span>
-                            <span
-                                class="ml-auto font-mono text-[10.5px] text-zinc-500 dark:text-[#6c7177]"
-                                >{{ item.count }}</span
-                            >
-                        </Link>
-                    </nav>
-
-                    <div
-                        class="mt-3 border-t border-zinc-200 pt-2 dark:border-[#16191c]"
-                    >
-                        <div
-                            class="px-2 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                        >
-                            Configuration
-                        </div>
-                        <nav class="space-y-0.5">
-                            <Link
-                                v-for="item in configItems"
-                                :key="item.label"
-                                :href="item.href"
-                                class="relative flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left font-sans text-[12.5px] text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                                :class="{
-                                    'bg-zinc-200/70 font-medium text-zinc-950 before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-r before:bg-teal-300 dark:bg-[#1a1e22] dark:text-zinc-100':
-                                        props.section === item.section,
-                                }"
-                            >
-                                <component :is="item.icon" class="size-3.5" />
-                                <span class="truncate">{{ item.label }}</span>
-                            </Link>
-                        </nav>
-                    </div>
-                </div>
-
-                <div
-                    class="absolute right-2 bottom-3 left-2 rounded-lg border border-zinc-200 bg-white p-2.5 dark:border-[#1d2125] dark:bg-[#111315]"
-                >
-                    <div
-                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                    >
-                        {{ quotaTitle }}
-                    </div>
-                    <div
-                        class="mt-2 flex justify-between font-sans text-[11.5px] text-zinc-500 dark:text-[#9aa0a6]"
-                    >
-                        <span>{{ quota.sent.toLocaleString() }} sent</span>
-                        <span
-                            v-if="hasProviderQuota"
-                            class="font-mono text-zinc-900 dark:text-zinc-100"
-                            >{{ quotaPercent }}%</span
-                        >
-                        <span
-                            v-else
-                            class="font-mono text-zinc-900 dark:text-zinc-100"
-                            >30d</span
-                        >
-                    </div>
-                    <div
-                        v-if="hasProviderQuota"
-                        class="mt-2 h-1 rounded-full bg-zinc-200 dark:bg-[#1a1e22]"
-                    >
-                        <div
-                            class="h-1 rounded-full bg-teal-300"
-                            :style="{ width: `${quotaPercent}%` }"
-                        />
-                    </div>
-                    <div
-                        class="mt-2 flex justify-between border-t border-zinc-200 pt-2 font-sans text-[11.5px] text-zinc-500 dark:border-[#16191c] dark:text-[#9aa0a6]"
-                    >
-                        <span>{{
-                            hasProviderQuota ? 'Daily limit' : 'Provider quota'
-                        }}</span>
-                        <button
-                            v-if="!hasProviderQuota"
-                            type="button"
-                            class="inline-flex items-center gap-1 font-mono text-zinc-900 transition hover:text-teal-600 disabled:cursor-wait disabled:opacity-60 dark:text-zinc-100 dark:hover:text-teal-300"
-                            :disabled="syncingQuota"
-                            title="Sync provider sending quota from the configured source"
-                            @click="syncQuota()"
-                        >
-                            <RefreshCw
-                                class="size-3"
-                                :class="{ 'animate-spin': syncingQuota }"
-                            />
-                            {{ syncingQuota ? 'syncing' : 'sync' }}
-                        </button>
-                        <span
-                            v-else
-                            class="font-mono text-zinc-900 dark:text-zinc-100"
-                            >{{
-                                `${quota.limit?.toLocaleString()} / ${quota.rate ?? 'unknown'}/s`
-                            }}</span
-                        >
-                    </div>
-                    <div
-                        class="mt-1 truncate font-sans text-[10.5px] text-zinc-400 dark:text-[#6c7177]"
-                    >
-                        {{ quotaStatus }}
-                    </div>
-                    <div
-                        class="mt-2 border-t border-zinc-200 pt-2 font-mono text-[10px] text-zinc-400 dark:border-[#16191c] dark:text-[#6c7177]"
-                    >
-                        {{ buildLabel }}
-                    </div>
-                </div>
-            </aside>
-
             <main
-                class="row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden"
+                class="col-start-1 row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden lg:col-start-2"
             >
                 <div
                     v-if="showWorkerBanner"
@@ -2146,13 +1715,19 @@ function recipientTitle(email: EmailRow): string | undefined {
                 >
                     <AlertTriangle class="size-4 shrink-0" />
                     <span class="font-semibold">
-                        {{ system.stuck_queued }}
-                        {{
-                            system.stuck_queued === 1
-                                ? 'email is'
-                                : 'emails are'
-                        }}
-                        stuck in the queue and no queue worker is running.
+                        <template v-if="system.stuck_queued > 0">
+                            {{ system.stuck_queued }}
+                            {{
+                                system.stuck_queued === 1
+                                    ? 'email is'
+                                    : 'emails are'
+                            }}
+                            stuck in the queue.
+                        </template>
+                        <template v-else>
+                            Queue worker is not running. New email will remain
+                            queued.
+                        </template>
                     </span>
                     <span>
                         Start one with
@@ -2169,25 +1744,25 @@ function recipientTitle(email: EmailRow): string | undefined {
                     </span>
                 </div>
                 <section
-                    class="flex h-11 shrink-0 items-center gap-2.5 border-b border-zinc-200 px-3.5 dark:border-[#1d2125]"
+                    class="flex min-h-14 shrink-0 items-center gap-2.5 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
                 >
                     <div class="flex items-center gap-3">
                         <h1
-                            class="m-0 font-sans text-[15px] font-semibold tracking-tight"
+                            class="m-0 font-sans text-lg font-semibold tracking-tight"
                         >
                             {{ pageTitle }}
                         </h1>
                     </div>
                     <span
-                        class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-500 dark:border-[#1d2125] dark:text-[#9aa0a6]"
+                        class="hidden items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-500 sm:inline-flex dark:border-[#1d2125] dark:text-[#9aa0a6]"
                     >
                         <span
                             class="inline-block size-1.5 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(92,212,148,0.14)]"
                         />live
                     </span>
                     <div
-                        v-if="isMailSection"
-                        class="ml-auto flex rounded-lg border border-zinc-200 bg-white p-0.5 text-[11px] dark:border-[#1d2125] dark:bg-[#111315]"
+                        v-if="showRangeControls"
+                        class="ml-auto hidden rounded-lg border border-zinc-200 bg-white p-0.5 text-xs md:flex dark:border-[#1d2125] dark:bg-[#111315]"
                     >
                         <button
                             v-for="range in ['1h', '24h', '7d', '14d', '30d']"
@@ -2210,49 +1785,23 @@ function recipientTitle(email: EmailRow): string | undefined {
                     >
                 </section>
 
-                <section
-                    v-if="showMetrics"
-                    class="grid shrink-0 grid-cols-6 border-b border-zinc-200 dark:border-[#1d2125]"
+                <div
+                    v-if="section === 'activity'"
+                    class="min-h-0 flex-1 overflow-auto p-5"
                 >
-                    <div
-                        v-for="metric in metrics"
-                        :key="metric.label"
-                        class="min-h-[54px] min-w-0 border-r border-zinc-200 px-3 py-2 last:border-r-0 hover:bg-zinc-100 dark:border-[#1d2125] dark:hover:bg-[#111315]"
-                    >
-                        <div
-                            class="truncate font-mono text-[9.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                        >
-                            {{ metric.label }}
-                        </div>
-                        <div
-                            class="mt-1 font-sans text-[17px] leading-none font-semibold tracking-tight text-zinc-950 dark:text-[#e9eaec]"
-                        >
-                            {{ metric.value }}
-                        </div>
-                        <div
-                            v-if="metric.delta"
-                            class="mt-1 inline-flex max-w-full items-center gap-1 truncate font-mono text-[10px]"
-                            :class="{
-                                'text-emerald-400': metric.tone === 'good',
-                                'text-red-400': metric.tone === 'bad',
-                                'text-zinc-500 dark:text-[#6c7177]':
-                                    metric.tone === 'neutral',
-                            }"
-                        >
-                            <span>{{
-                                metric.trend === 'up'
-                                    ? '▲'
-                                    : metric.trend === 'down'
-                                      ? '▼'
-                                      : '•'
-                            }}</span>
-                            {{ metric.delta }}
-                        </div>
-                    </div>
-                </section>
+                    <DashboardPanel
+                        :project-slug="project.slug"
+                        :metrics="metrics"
+                        :emails="emails"
+                        :recent-threads="recentThreads"
+                        :inbox-unread="inboxUnread ?? 0"
+                        :source-ready="Boolean(source?.can_send)"
+                        :system="system"
+                    />
+                </div>
 
                 <div
-                    v-if="section === 'bounces'"
+                    v-else-if="section === 'bounces'"
                     class="min-h-0 flex-1 overflow-auto px-4 py-3"
                 >
                     <section
@@ -2338,7 +1887,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 <Link
                                     v-for="bounce in bounceQueue"
                                     :key="bounce.id"
-                                    :href="`${sectionHref('activity')}?q=${encodeURIComponent(bounce.id)}`"
+                                    :href="`${sectionHref('outbound')}?q=${encodeURIComponent(bounce.id)}`"
                                     class="grid min-w-[1080px] grid-cols-[96px_minmax(220px,1fr)_minmax(260px,1.25fr)_130px_minmax(180px,.8fr)_minmax(190px,.9fr)_100px_100px_42px] items-center border-b border-zinc-200 px-3 py-2.5 font-sans text-sm last:border-b-0 hover:bg-zinc-50 dark:border-zinc-900 dark:hover:bg-zinc-950"
                                 >
                                     <span>
@@ -2546,12 +2095,12 @@ function recipientTitle(email: EmailRow): string | undefined {
 
                 <div
                     v-else-if="isMailSection"
-                    class="grid min-h-0 flex-1 overflow-hidden"
-                    :style="{
-                        gridTemplateColumns: selected
-                            ? `minmax(0, 1fr) ${inspectorWidth}px`
-                            : 'minmax(0, 1fr)',
+                    class="relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden"
+                    :class="{
+                        'lg:[grid-template-columns:minmax(0,1fr)_var(--inspector-width)]':
+                            selected,
                     }"
+                    :style="mailLayoutStyle"
                 >
                     <section
                         class="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-zinc-200 dark:border-[#1d2125]"
@@ -2588,7 +2137,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                         </div>
 
                         <div
-                            class="grid shrink-0 grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] gap-3 border-b border-zinc-200 px-3.5 py-1.5 font-mono text-[10.5px] tracking-widest text-zinc-500 uppercase dark:border-[#1d2125] dark:text-[#6c7177]"
+                            class="hidden shrink-0 grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] gap-3 border-b border-zinc-200 px-3.5 py-1.5 font-mono text-[10.5px] tracking-widest text-zinc-500 uppercase lg:grid dark:border-[#1d2125] dark:text-[#6c7177]"
                         >
                             <div></div>
                             <div>Subject · Recipient</div>
@@ -2612,7 +2161,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 <button
                                     v-for="email in group.rows"
                                     :key="email.id"
-                                    class="relative grid h-11 w-full min-w-[700px] grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] items-center gap-3 border-b border-zinc-100 px-3.5 text-left hover:bg-white dark:border-[#16191c] dark:hover:bg-[#111315]"
+                                    class="relative grid min-h-14 w-full grid-cols-[12px_minmax(0,1fr)_auto] items-center gap-3 border-b border-zinc-100 px-3.5 py-2 text-left hover:bg-white lg:h-11 lg:min-h-0 lg:min-w-[700px] lg:grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] lg:py-0 dark:border-[#16191c] dark:hover:bg-[#111315]"
                                     :class="{
                                         'bg-zinc-100 before:absolute before:top-0 before:bottom-0 before:left-0 before:w-0.5 before:bg-teal-300 dark:bg-[#1a1e22]':
                                             selected?.id === email.id,
@@ -2641,7 +2190,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         >
                                     </span>
                                     <span
-                                        class="inline-flex gap-2 font-mono text-[11px] text-zinc-500 dark:text-[#6c7177]"
+                                        class="hidden gap-2 font-mono text-[11px] text-zinc-500 lg:inline-flex dark:text-[#6c7177]"
                                     >
                                         <span
                                             :class="{
@@ -2668,7 +2217,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         >
                                     </span>
                                     <span
-                                        class="text-right font-mono text-[11px] text-zinc-500 dark:text-[#6c7177]"
+                                        class="hidden text-right font-mono text-[11px] text-zinc-500 lg:block dark:text-[#6c7177]"
                                         >{{ email.time }}</span
                                     >
                                 </button>
@@ -2678,11 +2227,11 @@ function recipientTitle(email: EmailRow): string | undefined {
 
                     <aside
                         v-if="selected"
-                        class="relative flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-zinc-200 bg-[#fbfaf7] dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                        class="fixed inset-x-0 top-[60px] bottom-16 z-40 flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-zinc-200 bg-[#fbfaf7] lg:relative lg:inset-auto lg:z-auto dark:border-[#1d2125] dark:bg-[#0b0c0d]"
                     >
                         <button
                             type="button"
-                            class="absolute top-0 bottom-0 left-0 z-10 w-2 cursor-col-resize border-l border-transparent hover:border-teal-300 focus-visible:border-teal-300 focus-visible:outline-none"
+                            class="absolute top-0 bottom-0 left-0 z-10 hidden w-2 cursor-col-resize border-l border-transparent hover:border-teal-300 focus-visible:border-teal-300 focus-visible:outline-none lg:block"
                             :class="{
                                 'border-teal-300 bg-teal-300/10':
                                     isResizingInspector,
@@ -3434,17 +2983,20 @@ function recipientTitle(email: EmailRow): string | undefined {
                         </div>
                     </div>
 
-                    <div v-else-if="section === 'setup'" class="grid gap-4">
-                        <div
+                    <div
+                        v-else-if="section === 'setup'"
+                        class="grid max-w-5xl gap-4"
+                    >
+                        <section
                             v-if="setup.next_step"
-                            class="max-w-5xl rounded-lg border border-teal-200 bg-teal-50 p-4 font-sans text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
+                            class="rounded-xl border border-teal-200 bg-teal-50 p-5 font-sans text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
                         >
                             <div
-                                class="flex flex-wrap items-center justify-between gap-3"
+                                class="flex flex-wrap items-center justify-between gap-4"
                             >
                                 <div>
                                     <div
-                                        class="font-mono text-[10px] tracking-widest text-teal-700 uppercase dark:text-teal-300"
+                                        class="font-mono text-[10px] font-semibold tracking-widest text-teal-700 uppercase dark:text-teal-300"
                                     >
                                         Next action
                                     </div>
@@ -3459,285 +3011,143 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </div>
                                 <Link
                                     :href="setup.next_step.href"
-                                    class="rounded-lg bg-teal-300 px-3 py-2 text-sm font-bold text-zinc-950 transition hover:brightness-105 active:translate-y-px"
+                                    class="rounded-lg bg-teal-300 px-4 py-2 text-sm font-semibold text-[#07221c] transition hover:brightness-105"
                                 >
-                                    Continue
+                                    Continue setup
                                 </Link>
                             </div>
-                        </div>
+                        </section>
 
-                        <div
-                            class="max-w-5xl rounded-lg border border-zinc-200 p-4 font-sans dark:border-zinc-800"
+                        <section
+                            v-else
+                            class="flex flex-wrap items-center gap-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5 font-sans text-emerald-950 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100"
                         >
-                            <h2 class="text-lg font-semibold">
-                                Sending source
-                            </h2>
-                            <p class="mt-2 max-w-3xl text-sm text-zinc-500">
-                                Verify the source, domain, event webhooks, API
-                                key, and first send before routing production
-                                traffic through Larasend.
-                            </p>
-                            <div
-                                class="mt-5 grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3"
+                            <span
+                                class="grid size-9 place-items-center rounded-full bg-emerald-500/15"
                             >
-                                <div
-                                    v-for="card in setupHealthCards"
-                                    :key="card.label"
-                                    class="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                                >
-                                    <div
-                                        class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase"
+                                <Check class="size-5" />
+                            </span>
+                            <div class="min-w-0 flex-1">
+                                <h2 class="font-semibold">
+                                    Project setup is complete
+                                </h2>
+                                <p class="mt-1 text-sm opacity-80">
+                                    Your provider, domain, API access, and first
+                                    real send are ready.
+                                </p>
+                            </div>
+                            <Link
+                                :href="sectionHref('source')"
+                                class="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold hover:bg-emerald-100 dark:border-emerald-400/30 dark:hover:bg-emerald-400/10"
+                            >
+                                Manage provider
+                            </Link>
+                        </section>
+
+                        <section
+                            class="overflow-hidden rounded-xl border border-zinc-200 bg-white font-sans dark:border-[#25292d] dark:bg-[#111315]"
+                        >
+                            <div
+                                class="flex flex-wrap items-end justify-between gap-4 border-b border-zinc-200 p-5 dark:border-[#25292d]"
+                            >
+                                <div>
+                                    <h2 class="text-lg font-semibold">
+                                        Project setup
+                                    </h2>
+                                    <p
+                                        class="mt-1 max-w-2xl text-sm text-zinc-500"
                                     >
-                                        {{ card.label }}
-                                    </div>
-                                    <div
-                                        class="mt-2 flex items-center gap-2 text-sm font-semibold"
-                                    >
-                                        <span
-                                            class="size-2 rounded-full"
-                                            :class="healthToneClass(card.tone)"
-                                        />
-                                        <span class="truncate">{{
-                                            card.value
-                                        }}</span>
-                                    </div>
-                                    <div
-                                        class="mt-1 truncate text-xs text-zinc-500"
-                                    >
-                                        {{ card.meta }}
-                                    </div>
+                                        Complete these steps once before routing
+                                        production email through Larasend.
+                                    </p>
+                                </div>
+                                <div class="font-mono text-xs text-zinc-500">
+                                    {{
+                                        setup.steps.filter(
+                                            (step) => step.complete,
+                                        ).length
+                                    }}
+                                    of {{ setup.steps.length }} complete
                                 </div>
                             </div>
-                            <div class="mt-5 grid gap-3">
+                            <div
+                                class="divide-y divide-zinc-200 dark:divide-[#25292d]"
+                            >
                                 <div
                                     v-for="step in setup.steps"
                                     :key="step.key"
-                                    class="grid grid-cols-[32px_1fr_140px] items-center gap-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                                    class="flex flex-wrap items-center gap-4 p-4"
                                 >
-                                    <div
-                                        class="flex size-7 items-center justify-center rounded-full text-sm font-bold"
+                                    <span
+                                        class="grid size-8 shrink-0 place-items-center rounded-full"
                                         :class="
                                             step.complete
-                                                ? 'bg-teal-400 text-zinc-950'
-                                                : 'bg-zinc-200 text-zinc-500 dark:bg-zinc-900'
+                                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                                                : 'bg-amber-500/10 text-amber-600 dark:text-amber-300'
                                         "
                                     >
-                                        {{ step.complete ? '✓' : '·' }}
-                                    </div>
-                                    <div>
-                                        <div class="font-semibold">
-                                            {{ step.label }}
+                                        <Check
+                                            v-if="step.complete"
+                                            class="size-4"
+                                        />
+                                        <span
+                                            v-else
+                                            class="size-2 rounded-full bg-current"
+                                        />
+                                    </span>
+                                    <div class="min-w-0 flex-1">
+                                        <div
+                                            class="flex flex-wrap items-center gap-2"
+                                        >
+                                            <h3 class="font-semibold">
+                                                {{ step.label }}
+                                            </h3>
+                                            <span
+                                                class="font-mono text-[10px] font-semibold uppercase"
+                                                :class="
+                                                    step.complete
+                                                        ? 'text-emerald-600 dark:text-emerald-300'
+                                                        : 'text-amber-600 dark:text-amber-300'
+                                                "
+                                            >
+                                                {{
+                                                    step.complete
+                                                        ? 'Complete'
+                                                        : step.status ||
+                                                          'Required'
+                                                }}
+                                            </span>
                                         </div>
-                                        <div class="mt-1 text-sm text-zinc-500">
+                                        <p
+                                            v-if="!step.complete"
+                                            class="mt-1 max-w-3xl text-sm text-zinc-500"
+                                        >
                                             {{ step.description }}
-                                        </div>
+                                        </p>
                                     </div>
                                     <Link
+                                        v-if="!step.complete"
                                         :href="step.href"
-                                        class="rounded-lg border border-zinc-200 px-3 py-2 text-center text-sm font-semibold text-zinc-600 hover:text-zinc-950 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                        class="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-[#16191c]"
                                     >
-                                        {{
-                                            step.complete
-                                                ? 'Review'
-                                                : 'Configure'
-                                        }}
+                                        Open
                                     </Link>
                                 </div>
                             </div>
-                        </div>
-
-                        <div
-                            class="grid max-w-5xl gap-3 rounded-lg border border-zinc-200 p-4 font-sans text-sm dark:border-zinc-800"
-                        >
-                            <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h2 class="text-lg font-semibold">
-                                        {{
-                                            isCloudflare
-                                                ? 'Cloudflare wiring'
-                                                : 'AWS wiring'
-                                        }}
-                                    </h2>
-                                    <p class="mt-1 text-sm text-zinc-500">
-                                        {{ quotaStatus }}
-                                    </p>
-                                </div>
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-600 transition hover:text-zinc-950 disabled:cursor-wait disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
-                                    :disabled="syncingQuota"
-                                    title="Sync provider sending quota"
-                                    @click="syncQuota()"
-                                >
-                                    <RefreshCw
-                                        class="size-4"
-                                        :class="{
-                                            'animate-spin': syncingQuota,
-                                        }"
-                                    />
-                                    {{
-                                        syncingQuota
-                                            ? 'Syncing...'
-                                            : 'Sync quota'
-                                    }}
-                                </button>
-                            </div>
-                            <div class="grid gap-2 text-zinc-500">
-                                <div
-                                    class="grid gap-3 rounded-lg border border-zinc-200 p-3 text-zinc-700 dark:border-zinc-800 dark:text-zinc-300"
-                                >
-                                    <div class="grid gap-3 md:grid-cols-5">
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Source
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{
-                                                    source?.name || 'Production'
-                                                }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Credentials
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{ credentialMode }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Default sender
-                                            </div>
-                                            <div
-                                                class="mt-1 truncate font-semibold"
-                                            >
-                                                {{
-                                                    source?.default_from_email ||
-                                                    'Missing'
-                                                }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                {{
-                                                    isCloudflare
-                                                        ? 'Events'
-                                                        : 'SES events'
-                                                }}
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{
-                                                    isCloudflare
-                                                        ? 'Suppression sync'
-                                                        : setup.webhook_url
-                                                          ? 'Webhook ready'
-                                                          : 'Not configured'
-                                                }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Quota
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{ quotaDetail }}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <template v-if="isCloudflare">
-                                    <div>
-                                        1. Deploy the app with `APP_URL`,
-                                        database, queue worker, scheduler, and
-                                        HTTPS configured.
-                                    </div>
-                                    <div>
-                                        2. Enable the Workers Paid plan on the
-                                        Cloudflare account and make sure the
-                                        sending domain uses Cloudflare DNS.
-                                    </div>
-                                    <div>
-                                        3.
-                                        <a
-                                            :href="cloudflareTokenUrl"
-                                            target="_blank"
-                                            rel="noopener"
-                                            class="font-semibold text-zinc-950 underline dark:text-zinc-100"
-                                            >Create an API token</a
-                                        >
-                                        with Email Sending Edit, Zone Read, and
-                                        DNS Edit, then save it with your account
-                                        ID in the source settings. Add the
-                                        sending domain in Larasend and it is
-                                        onboarded in Cloudflare automatically.
-                                    </div>
-                                    <div>
-                                        4. Delivery events are limited to SMTP
-                                        accept/reject at send time; Cloudflare
-                                        suppressions sync into Larasend hourly.
-                                    </div>
-                                    <div>
-                                        5. Create an API key and set
-                                        `MAIL_MAILER=larasend`,
-                                        `LARASEND_API_KEY`, and
-                                        `LARASEND_ENDPOINT` in the Laravel app
-                                        that sends mail.
-                                    </div>
-                                </template>
-                                <template v-else>
-                                    <div>
-                                        1. Deploy the app with `APP_URL`,
-                                        database, queue worker, and HTTPS
-                                        configured.
-                                    </div>
-                                    <div>
-                                        2. Create an IAM user or role with SES
-                                        permissions for `ses:SendRawEmail`,
-                                        `ses:CreateEmailIdentity`,
-                                        `ses:GetEmailIdentity`,
-                                        `ses:GetSendQuota`, and
-                                        `ses:GetAccount`.
-                                    </div>
-                                    <div>
-                                        3. Save the SES source in Larasend, add
-                                        your sending domain, then publish the
-                                        DKIM records in Route 53 or your DNS
-                                        provider.
-                                    </div>
-                                    <div>
-                                        4. Configure SES event publishing
-                                        through SNS to this webhook URL:
-                                    </div>
-                                    <div
-                                        class="overflow-auto rounded-md bg-zinc-100 p-3 font-mono text-xs text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
-                                    >
-                                        {{
-                                            setup.webhook_url ||
-                                            'Save a source first'
-                                        }}
-                                    </div>
-                                    <div>
-                                        5. Create an API key and set
-                                        `MAIL_MAILER=larasend`,
-                                        `LARASEND_API_KEY`, and
-                                        `LARASEND_ENDPOINT` in the Laravel app
-                                        that sends mail.
-                                    </div>
-                                </template>
-                            </div>
-                        </div>
+                        </section>
                     </div>
+
+                    <EmailProviderPanel
+                        v-else-if="section === 'source'"
+                        :project-slug="project.slug"
+                        :project-path="projectBasePath"
+                        :can-manage="workspace.can_manage_domains"
+                        :source="source"
+                        :quota="quota"
+                        :verified-domain="verifiedDomain?.domain ?? null"
+                        :domain-count="domains.length"
+                        :webhook-url="setup.webhook_url"
+                    />
 
                     <div v-else-if="section === 'send'" class="grid gap-4">
                         <div
@@ -3759,10 +3169,10 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </div>
                             </div>
                             <Link
-                                :href="projectAction('/identities')"
+                                :href="sectionHref('source')"
                                 class="w-fit rounded-lg bg-amber-400 px-4 py-2 text-sm font-bold text-amber-950"
                             >
-                                Open identities
+                                Configure email provider
                             </Link>
                         </div>
                         <form
@@ -3893,18 +3303,31 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 @submit.prevent="addDomain"
                             >
                                 <label class="grid gap-2 text-sm">
-                                    <span class="text-zinc-500">Domain</span>
+                                    <span class="text-zinc-500"
+                                        >Email or domain</span
+                                    >
                                     <input
                                         v-model="domainForm.domain"
                                         class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                        placeholder="mail.example.com"
+                                        placeholder="founder@example.com"
                                         required
                                     />
+                                    <span
+                                        v-if="domainForm.errors.domain"
+                                        class="text-xs font-medium text-red-600 dark:text-red-400"
+                                    >
+                                        {{ domainForm.errors.domain }}
+                                    </span>
                                 </label>
                                 <button
                                     class="w-fit rounded-lg bg-teal-400 px-3 py-2 text-sm font-bold text-zinc-950"
+                                    :disabled="domainForm.processing"
                                 >
-                                    Create identity
+                                    {{
+                                        domainForm.processing
+                                            ? 'Creating...'
+                                            : 'Create identity'
+                                    }}
                                 </button>
                             </form>
                             <button
@@ -4036,20 +3459,6 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     </button>
                                     <button
                                         v-if="workspace.can_manage_domains"
-                                        class="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-600 transition hover:text-zinc-950 active:scale-[0.98] dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
-                                        @click="
-                                            showSourceSettings =
-                                                !showSourceSettings
-                                        "
-                                    >
-                                        {{
-                                            showSourceSettings
-                                                ? 'Hide source settings'
-                                                : 'Source settings'
-                                        }}
-                                    </button>
-                                    <button
-                                        v-if="workspace.can_manage_domains"
                                         class="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-500 transition hover:border-red-300 hover:bg-red-50 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 dark:border-red-500/20 dark:hover:bg-red-500/10"
                                         :disabled="
                                             deletingDomainId ===
@@ -4139,6 +3548,54 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         </p>
                                     </div>
                                 </div>
+                            </div>
+
+                            <div
+                                v-if="isCloudflare"
+                                class="mt-5 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                            >
+                                <Inbox class="size-4 text-teal-500" />
+                                <div class="min-w-0 flex-1">
+                                    <h3 class="font-semibold">Receive email</h3>
+                                    <p class="mt-0.5 text-sm text-zinc-500">
+                                        {{
+                                            selectedIdentity.inbound_enabled_at
+                                                ? 'Inbound is on: mail to any address on this zone lands in the Inbound section and fires inbound.received webhooks.'
+                                                : 'Larasend deploys a Cloudflare Worker and routing rule so mail to this zone lands in your Inbound section.'
+                                        }}
+                                    </p>
+                                </div>
+                                <span
+                                    v-if="selectedIdentity.inbound_enabled_at"
+                                    class="rounded-md bg-emerald-500/12 px-2.5 py-1 font-mono text-xs text-emerald-400"
+                                    >enabled</span
+                                >
+                                <div
+                                    v-if="
+                                        inboundError &&
+                                        !selectedIdentity.inbound_enabled_at
+                                    "
+                                    class="w-full rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-950 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100"
+                                >
+                                    {{ inboundError }}
+                                </div>
+                                <button
+                                    v-else-if="workspace.can_manage_domains"
+                                    type="button"
+                                    class="rounded-lg bg-teal-400 px-3 py-2 text-sm font-bold text-zinc-950 disabled:cursor-wait disabled:opacity-60"
+                                    :disabled="
+                                        enablingInboundDomainId ===
+                                        selectedIdentity.id
+                                    "
+                                    @click="enableInbound(selectedIdentity.id)"
+                                >
+                                    {{
+                                        enablingInboundDomainId ===
+                                        selectedIdentity.id
+                                            ? 'Enabling...'
+                                            : 'Enable receiving'
+                                    }}
+                                </button>
                             </div>
 
                             <div class="mt-5">
@@ -4269,313 +3726,143 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     </div>
                                 </div>
                             </div>
+                        </section>
+                    </div>
 
-                            <section
-                                v-if="showSourceSettings"
-                                class="mt-5 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                    <div
+                        v-else-if="section === 'inbound'"
+                        class="grid min-h-0 gap-0 overflow-hidden rounded-lg border border-zinc-200 bg-white lg:grid-cols-[360px_minmax(0,1fr)] dark:border-zinc-800 dark:bg-[#090a0a]"
+                    >
+                        <aside
+                            class="min-h-0 overflow-auto border-r border-zinc-200 dark:border-zinc-800"
+                        >
+                            <div
+                                class="border-b border-zinc-200 p-4 font-sans dark:border-zinc-800"
                             >
-                                <div class="flex items-center justify-between">
-                                    <h3 class="font-semibold">
-                                        Source settings
-                                    </h3>
-                                    <button
-                                        class="text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-100"
-                                        title="Close source settings"
-                                        @click="showSourceSettings = false"
-                                    >
-                                        <X class="size-4" />
-                                    </button>
-                                </div>
-                                <form
-                                    class="mt-5 grid gap-4"
-                                    @submit.prevent="saveSource"
+                                <h2 class="font-semibold">
+                                    Inbound
+                                    <span class="text-zinc-500">{{
+                                        inboundEmails.length
+                                    }}</span>
+                                </h2>
+                                <p class="mt-1 text-sm text-zinc-500">
+                                    Email received for your domains. Enable
+                                    receiving per domain under Domains.
+                                </p>
+                            </div>
+                            <div
+                                v-if="!inboundEmails.length"
+                                class="p-4 font-sans text-sm text-zinc-500"
+                            >
+                                Nothing received yet. Enable receiving on a
+                                domain, then send an email to any address on it.
+                            </div>
+                            <button
+                                v-for="email in inboundEmails"
+                                :key="email.public_id"
+                                type="button"
+                                class="grid w-full gap-1 border-b border-zinc-200 p-4 text-left font-sans transition hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-[#141618]"
+                                :class="
+                                    selectedInbound?.public_id ===
+                                    email.public_id
+                                        ? 'bg-teal-50 dark:bg-teal-400/10'
+                                        : ''
+                                "
+                                @click="selectedInboundId = email.public_id"
+                            >
+                                <div
+                                    class="flex items-baseline justify-between gap-2"
                                 >
-                                    <div
-                                        v-if="source?.uses_instance_role"
-                                        class="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-950 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-100"
+                                    <span
+                                        class="truncate text-sm font-semibold"
                                     >
-                                        Production is using the EC2 instance
-                                        role. AWS key fields below are optional
-                                        overrides for self-hosted or non-role
-                                        deployments.
-                                    </div>
-                                    <div
-                                        class="grid gap-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                                        {{
+                                            email.from_name || email.from_email
+                                        }}
+                                    </span>
+                                    <span
+                                        class="shrink-0 font-mono text-[11px] text-zinc-500"
                                     >
-                                        <div class="font-semibold">Source</div>
-                                        <div class="grid grid-cols-3 gap-4">
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Name</span
-                                                >
-                                                <input
-                                                    v-model="sourceForm.name"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Environment</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.environment
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Provider</span
-                                                >
-                                                <select
-                                                    v-model="
-                                                        sourceForm.provider
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                >
-                                                    <option value="ses">
-                                                        Amazon SES
-                                                    </option>
-                                                    <option value="cloudflare">
-                                                        Cloudflare Email Service
-                                                    </option>
-                                                </select>
-                                            </label>
-                                            <label
-                                                v-if="
-                                                    sourceForm.provider ===
-                                                    'ses'
-                                                "
-                                                class="grid gap-2 text-sm"
-                                            >
-                                                <span class="text-zinc-500"
-                                                    >SES region</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.ses_region
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="grid gap-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                                        {{ relativeTime(email.received_at) }}
+                                    </span>
+                                </div>
+                                <div class="truncate text-sm">
+                                    {{ email.subject || '(no subject)' }}
+                                </div>
+                                <div
+                                    class="truncate font-mono text-[11px] text-zinc-500"
+                                >
+                                    to {{ email.to_email }}
+                                </div>
+                            </button>
+                        </aside>
+                        <section
+                            v-if="selectedInbound"
+                            class="grid min-h-0 content-start gap-4 overflow-auto p-5 font-sans"
+                        >
+                            <div>
+                                <h2 class="text-lg font-semibold">
+                                    {{
+                                        selectedInbound.subject ||
+                                        '(no subject)'
+                                    }}
+                                </h2>
+                                <div
+                                    class="mt-1 grid gap-0.5 font-mono text-xs text-zinc-500"
+                                >
+                                    <span>
+                                        from
+                                        {{
+                                            selectedInbound.from_name
+                                                ? `${selectedInbound.from_name} <${selectedInbound.from_email}>`
+                                                : selectedInbound.from_email
+                                        }}
+                                    </span>
+                                    <span
+                                        >to {{ selectedInbound.to_email }}</span
                                     >
-                                        <div class="font-semibold">
-                                            Default sender
-                                        </div>
-                                        <div class="grid gap-4 md:grid-cols-2">
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Default from email</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.default_from_email
-                                                    "
-                                                    type="email"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                            <label
-                                                v-if="
-                                                    sourceForm.provider ===
-                                                    'ses'
-                                                "
-                                                class="grid gap-2 text-sm"
-                                            >
-                                                <span class="text-zinc-500"
-                                                    >SES configuration set</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.ses_configuration_set
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Optional"
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="grid gap-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                                    <span
+                                        v-if="
+                                            selectedInbound.attachments?.length
+                                        "
                                     >
-                                        <div class="font-semibold">
-                                            Credentials
-                                        </div>
-                                        <div
-                                            v-if="
-                                                sourceForm.provider ===
-                                                'cloudflare'
-                                            "
-                                            class="grid gap-4"
-                                        >
-                                            <div
-                                                class="grid gap-4 md:grid-cols-2"
-                                            >
-                                                <label
-                                                    class="grid gap-2 text-sm"
-                                                >
-                                                    <span class="text-zinc-500"
-                                                        >Cloudflare account
-                                                        ID</span
-                                                    >
-                                                    <input
-                                                        v-model="
-                                                            sourceForm.cloudflare_account_id
-                                                        "
-                                                        autocomplete="off"
-                                                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                        placeholder="From the Cloudflare dashboard URL"
-                                                    />
-                                                </label>
-                                                <label
-                                                    class="grid gap-2 text-sm"
-                                                >
-                                                    <span class="text-zinc-500"
-                                                        >Cloudflare API
-                                                        token</span
-                                                    >
-                                                    <input
-                                                        v-model="
-                                                            sourceForm.cloudflare_api_token
-                                                        "
-                                                        type="password"
-                                                        autocomplete="new-password"
-                                                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                        placeholder="Leave blank to keep saved value"
-                                                    />
-                                                </label>
-                                            </div>
-                                            <p class="text-sm text-zinc-500">
-                                                <a
-                                                    :href="cloudflareTokenUrl"
-                                                    target="_blank"
-                                                    rel="noopener"
-                                                    class="font-semibold text-zinc-950 underline dark:text-zinc-100"
-                                                    >Create a token in
-                                                    Cloudflare</a
-                                                >
-                                                with Email Sending Edit, Zone
-                                                Read, and DNS Edit pre-selected
-                                                — Larasend uses these to onboard
-                                                sending domains automatically.
-                                                If a permission does not appear,
-                                                search for it in the token form.
-                                            </p>
-                                        </div>
-                                        <div
-                                            v-else
-                                            class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-                                        >
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >AWS access key ID
-                                                    <span
-                                                        v-if="
-                                                            source?.uses_instance_role
-                                                        "
-                                                        class="font-normal"
-                                                        >(optional
-                                                        override)</span
-                                                    ></span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.aws_access_key_id
-                                                    "
-                                                    autocomplete="off"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Leave blank to keep saved value"
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >AWS secret access key
-                                                    <span
-                                                        v-if="
-                                                            source?.uses_instance_role
-                                                        "
-                                                        class="font-normal"
-                                                        >(optional
-                                                        override)</span
-                                                    ></span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.aws_secret_access_key
-                                                    "
-                                                    type="password"
-                                                    autocomplete="new-password"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Leave blank to keep saved value"
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >AWS session token</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.aws_session_token
-                                                    "
-                                                    autocomplete="off"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Optional STS token"
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div
-                                        v-if="sourceForm.provider === 'ses'"
-                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">
-                                            SES events
-                                        </div>
-                                        <div
-                                            class="font-mono text-xs text-zinc-500"
-                                        >
-                                            {{
-                                                setup.webhook_url ||
-                                                'Save a source first'
-                                            }}
-                                        </div>
-                                    </div>
-                                    <div
-                                        v-else
-                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">Events</div>
-                                        <div class="text-zinc-500">
-                                            Cloudflare has no event webhooks.
-                                            Delivery state is recorded at send
-                                            time and suppressions sync hourly.
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">Quota</div>
-                                        <div class="text-zinc-500">
-                                            {{ quotaDetail }} ·
-                                            {{ quotaStatus }}
-                                        </div>
-                                    </div>
-                                    <button
-                                        class="w-fit rounded-lg bg-teal-400 px-4 py-2 text-sm font-bold text-zinc-950"
-                                    >
-                                        Save source
-                                    </button>
-                                </form>
-                            </section>
+                                        {{ selectedInbound.attachments.length }}
+                                        attachment{{
+                                            selectedInbound.attachments
+                                                .length === 1
+                                                ? ''
+                                                : 's'
+                                        }}
+                                        ·
+                                        {{
+                                            selectedInbound.attachments
+                                                .map((a) => a.filename)
+                                                .filter(Boolean)
+                                                .join(', ')
+                                        }}
+                                    </span>
+                                </div>
+                            </div>
+                            <iframe
+                                v-if="selectedInbound.html"
+                                :srcdoc="selectedInbound.html"
+                                sandbox=""
+                                class="h-[60vh] w-full rounded-lg border border-zinc-200 bg-white dark:border-zinc-800"
+                                title="Inbound email preview"
+                            />
+                            <pre
+                                v-else
+                                class="rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs whitespace-pre-wrap text-zinc-800 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
+                                >{{
+                                    selectedInbound.text || '(empty body)'
+                                }}</pre
+                            >
+                        </section>
+                        <section
+                            v-else
+                            class="grid place-items-center p-10 font-sans text-sm text-zinc-500"
+                        >
+                            Select an email to preview it.
                         </section>
                     </div>
 
@@ -5788,4 +5075,5 @@ function recipientTitle(email: EmailRow): string | undefined {
             </section>
         </div>
     </div>
+    <Toaster />
 </template>

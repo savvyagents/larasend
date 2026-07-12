@@ -26,7 +26,7 @@ class StoreWebhookEndpointRequest extends FormRequest
         return [
             'url' => ['required', 'url:http,https', 'max:2048'],
             'events' => ['required', 'array', 'min:1'],
-            'events.*' => ['string', Rule::in(['delivery', 'bounce', 'complaint', 'open', 'click', 'suppress'])],
+            'events.*' => ['string', Rule::in(['delivery', 'bounce', 'complaint', 'open', 'click', 'suppress', 'inbound.received'])],
             'status' => ['required', Rule::in(['active', 'paused'])],
         ];
     }

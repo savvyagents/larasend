@@ -248,6 +248,70 @@ class CloudflareApiClient
         }
     }
 
+    /**
+     * Upload (or overwrite) a single-file ES module Worker with plain-text
+     * environment bindings. Used to deploy the inbound email passthrough.
+     *
+     * @param  array<string, string>  $vars
+     */
+    public function uploadWorker(Source $source, string $scriptName, string $code, array $vars): void
+    {
+        $metadata = [
+            'main_module' => 'worker.js',
+            'compatibility_date' => '2025-01-01',
+            'bindings' => collect($vars)
+                ->map(fn (string $text, string $name): array => [
+                    'type' => 'plain_text',
+                    'name' => $name,
+                    'text' => $text,
+                ])
+                ->values()
+                ->all(),
+        ];
+
+        $response = Http::withToken((string) $source->cloudflare_api_token)
+            ->acceptJson()
+            ->timeout(30)
+            ->attach('metadata', json_encode($metadata, JSON_THROW_ON_ERROR), 'metadata.json', ['Content-Type' => 'application/json'])
+            ->attach('worker.js', $code, 'worker.js', ['Content-Type' => 'application/javascript+module'])
+            ->put("https://api.cloudflare.com/client/v4/accounts/{$source->cloudflare_account_id}/workers/scripts/{$scriptName}");
+
+        $this->ensureSuccessful($response);
+    }
+
+    public function enableEmailRouting(Source $source, string $zoneId): void
+    {
+        $response = $this->rootRequest($source)->post("/zones/{$zoneId}/email/routing/enable");
+
+        if ($response->successful()) {
+            return;
+        }
+
+        // Already enabled is success for our purposes.
+        $alreadyEnabled = collect($response->json('errors') ?? [])
+            ->contains(fn (array $error): bool => str_contains(strtolower((string) ($error['message'] ?? '')), 'already enabled'));
+
+        if (! $alreadyEnabled) {
+            $this->ensureSuccessful($response);
+        }
+    }
+
+    /**
+     * Point the zone's catch-all routing rule at a Worker so every address
+     * on the domain is delivered to it.
+     */
+    public function routeCatchAllToWorker(Source $source, string $zoneId, string $workerName): void
+    {
+        $response = $this->rootRequest($source)->put("/zones/{$zoneId}/email/routing/rules/catch_all", [
+            'name' => 'Larasend inbound',
+            'enabled' => true,
+            'matchers' => [['type' => 'all']],
+            'actions' => [['type' => 'worker', 'value' => [$workerName]]],
+        ]);
+
+        $this->ensureSuccessful($response);
+    }
+
     private function request(Source $source): PendingRequest
     {
         return Http::withToken((string) $source->cloudflare_api_token)
