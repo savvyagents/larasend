@@ -266,23 +266,23 @@ const mobileItems = computed(() => [
             </div>
         </div>
 
-        <nav class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <nav class="min-h-0 flex-1 overflow-y-auto px-3 py-2">
             <section
                 v-for="group in navigationGroups"
                 :key="group.label"
-                class="mb-4 last:mb-0"
+                class="mb-2.5 last:mb-0"
             >
                 <h2
-                    class="mb-1 px-2 font-mono text-[10px] font-semibold tracking-[0.14em] text-zinc-400 uppercase dark:text-[#6c7177]"
+                    class="mb-0.5 px-2 font-mono text-[9.5px] font-semibold tracking-[0.14em] text-zinc-400 uppercase dark:text-[#6c7177]"
                 >
                     {{ group.label }}
                 </h2>
-                <div class="grid gap-0.5">
+                <div class="grid gap-0">
                     <Link
                         v-for="item in group.items"
                         :key="item.section"
                         :href="item.href"
-                        class="relative flex min-h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium transition"
+                        class="relative flex min-h-8 items-center gap-2 rounded-lg px-2 text-[12.5px] font-medium transition"
                         :class="
                             section === item.section
                                 ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
