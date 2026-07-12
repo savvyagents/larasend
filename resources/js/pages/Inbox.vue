@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { Head, router, useForm, usePoll } from '@inertiajs/vue3';
+import { Head, Link, router, useForm, usePoll } from '@inertiajs/vue3';
 import {
     AlarmClock,
     Archive,
     ArchiveRestore,
+    ArrowLeft,
     AtSign,
     Forward,
     Inbox as InboxIcon,
@@ -63,6 +64,14 @@ const props = defineProps<{
         path: string;
         dashboard_path: string;
     };
+    projects: {
+        name: string;
+        slug: string;
+        environment: string;
+        provider_label: string;
+        is_current: boolean;
+        href: string;
+    }[];
     canSend: boolean;
     mailbox: string;
     address: string | null;
@@ -541,25 +550,37 @@ function participantSummary(thread: ThreadRow): string {
     <Head :title="pageTitle" />
 
     <div
-        class="grid h-screen grid-cols-[56px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)] bg-[#fbfaf7] font-sans text-[13px] text-zinc-950 dark:bg-[#090a0a] dark:text-zinc-100"
+        class="grid h-screen grid-cols-1 grid-rows-[60px_minmax(0,1fr)] bg-[#fbfaf7] pb-16 font-sans text-sm text-zinc-950 lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[64px_minmax(0,1fr)] lg:pb-0 dark:bg-[#090a0a] dark:text-zinc-100"
     >
         <GlobalRail
             class="col-start-1 row-span-2 row-start-1"
             :project-path="project.path"
-            area="inbox"
+            :project-name="project.name"
+            :project-slug="project.slug"
+            section="inbox"
+            :projects="projects"
             :inbox-unread="counts.unread"
         />
         <header
-            class="col-start-2 row-start-1 flex items-center gap-3 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
+            class="col-start-1 row-start-1 flex items-center gap-3 border-b border-zinc-200 px-4 lg:col-start-2 dark:border-[#1d2125]"
         >
-            <div class="flex items-baseline gap-2">
-                <span class="font-semibold">{{ project.name }}</span>
-                <span class="font-mono text-[11px] text-zinc-500">Inbox</span>
+            <div class="flex min-w-0 items-center gap-2.5">
+                <Link
+                    href="/dashboard"
+                    class="grid size-8 shrink-0 place-items-center rounded-lg bg-teal-300 font-mono text-xs font-bold text-[#07221c] lg:hidden"
+                >
+                    L
+                </Link>
+                <span class="truncate font-semibold">{{ project.name }}</span>
+                <span
+                    class="hidden font-mono text-[11px] text-zinc-500 sm:inline"
+                    >Inbox</span
+                >
             </div>
             <button
                 v-if="canSend"
                 type="button"
-                class="ml-auto inline-flex items-center gap-2 rounded-md bg-teal-300 px-3 py-1.5 text-xs font-bold text-zinc-950 transition hover:brightness-105"
+                class="ml-auto inline-flex h-9 items-center gap-2 rounded-lg bg-teal-300 px-3 text-[13px] font-bold text-zinc-950 transition hover:brightness-105"
                 @click="showCompose = true"
             >
                 <PenSquare class="size-3.5" />
@@ -577,10 +598,10 @@ function participantSummary(thread: ThreadRow): string {
         </header>
 
         <div
-            class="col-start-2 row-start-2 grid min-h-0 grid-cols-[200px_360px_minmax(0,1fr)]"
+            class="col-start-1 row-start-2 grid min-h-0 grid-cols-1 md:grid-cols-[320px_minmax(0,1fr)] lg:col-start-2 xl:grid-cols-[200px_360px_minmax(0,1fr)]"
         >
             <aside
-                class="grid min-h-0 content-start gap-1 overflow-auto border-r border-zinc-200 p-3 dark:border-[#1d2125]"
+                class="hidden min-h-0 content-start gap-1 overflow-auto border-r border-zinc-200 p-3 xl:grid dark:border-[#1d2125]"
             >
                 <p
                     class="px-2 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
@@ -640,7 +661,8 @@ function participantSummary(thread: ThreadRow): string {
             </aside>
 
             <section
-                class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-zinc-200 dark:border-[#1d2125]"
+                class="min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-zinc-200 md:grid dark:border-[#1d2125]"
+                :class="selectedThread ? 'hidden md:grid' : 'grid'"
             >
                 <div
                     class="border-b border-zinc-200 p-2.5 dark:border-[#1d2125]"
@@ -743,8 +765,16 @@ function participantSummary(thread: ThreadRow): string {
                 class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]"
             >
                 <div
-                    class="flex items-center gap-3 border-b border-zinc-200 px-5 py-3 dark:border-[#1d2125]"
+                    class="flex items-center gap-2 border-b border-zinc-200 px-3 py-3 sm:gap-3 sm:px-5 dark:border-[#1d2125]"
                 >
+                    <button
+                        type="button"
+                        class="grid size-9 shrink-0 place-items-center rounded-lg border border-zinc-200 text-zinc-500 md:hidden dark:border-[#1d2125]"
+                        aria-label="Back to conversations"
+                        @click="visitInbox({ thread: null })"
+                    >
+                        <ArrowLeft class="size-4" />
+                    </button>
                     <div class="min-w-0 flex-1">
                         <h1 class="truncate text-[15px] font-semibold">
                             {{ selectedThread.subject || '(no subject)' }}
@@ -755,7 +785,7 @@ function participantSummary(thread: ThreadRow): string {
                     </div>
                     <button
                         type="button"
-                        class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                         :title="
                             selectedThread.unread ? 'Mark read' : 'Mark unread'
                         "
@@ -775,7 +805,7 @@ function participantSummary(thread: ThreadRow): string {
                     <div class="relative">
                         <button
                             type="button"
-                            class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                            class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                             :title="
                                 selectedThread.snoozed
                                     ? `Snoozed until ${selectedThread.snoozed_until_human}`
@@ -808,7 +838,7 @@ function participantSummary(thread: ThreadRow): string {
                     <button
                         v-if="canSend"
                         type="button"
-                        class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 lg:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                         title="Forward (f)"
                         @click="showForward = true"
                     >

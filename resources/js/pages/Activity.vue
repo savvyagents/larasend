@@ -1,19 +1,15 @@
 <script setup lang="ts">
 import { Head, Link, router, useForm, usePage, usePoll } from '@inertiajs/vue3';
 import {
-    Activity as ActivityIcon,
     AlertTriangle,
     Archive,
     ArrowUpRight,
     Check,
     Cloud,
     Copy,
-    FileText,
     Inbox,
     KeyRound,
-    MailCheck,
     Pencil,
-    Power,
     RefreshCw,
     Search,
     Send,
@@ -354,7 +350,6 @@ const selectedFilter = ref('All');
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const selectedRange = ref(props.filters.range || '14d');
-const showProjectMenu = ref(false);
 const showProjectForm = ref(false);
 const selectedIdentityDomain = ref(props.domains[0]?.domain ?? '');
 const showNewIdentity = ref(false);
@@ -602,15 +597,6 @@ const templateStats = computed(() => [
     },
 ]);
 
-const quotaPercent = computed(() =>
-    props.quota.limit
-        ? Math.min(
-              100,
-              Math.round((props.quota.sent / props.quota.limit) * 100),
-          )
-        : 0,
-);
-const hasProviderQuota = computed(() => Boolean(props.quota.limit));
 const isCloudflare = computed(() => props.source?.provider === 'cloudflare');
 const providerLabel = computed(
     () => props.source?.provider_label ?? 'Amazon SES',
@@ -628,13 +614,6 @@ const cloudflareTokenUrl = computed(() => {
 
     return `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${permissions}&name=Larasend%20Email%20Sending`;
 });
-const quotaTitle = computed(() =>
-    hasProviderQuota.value
-        ? isCloudflare.value
-            ? 'Cloudflare daily quota'
-            : 'SES 24h quota'
-        : 'Stored sends',
-);
 const quotaStatus = computed(() => {
     if (!props.source) {
         return 'source missing';
@@ -862,107 +841,8 @@ function relativeTime(value: string | null): string {
     return `${Math.round(hours / 24)}d ago`;
 }
 
-const navItems = computed(() => [
-    {
-        label: 'Activity',
-        section: 'activity',
-        href: sectionHref('activity'),
-        icon: ActivityIcon,
-        count: props.sidebarCounts.activity,
-    },
-    {
-        label: 'Sent',
-        section: 'sent',
-        href: sectionHref('sent'),
-        icon: Send,
-        count: props.sidebarCounts.sent,
-    },
-    {
-        label: 'Inbound log',
-        section: 'inbound',
-        href: sectionHref('inbound'),
-        icon: Inbox,
-        count: props.sidebarCounts.inbound,
-    },
-    {
-        label: 'Bounces',
-        section: 'bounces',
-        href: sectionHref('bounces'),
-        icon: ActivityIcon,
-        count: props.sidebarCounts.bounces,
-    },
-    {
-        label: 'Complaints',
-        section: 'complaints',
-        href: sectionHref('complaints'),
-        icon: AlertTriangle,
-        count: props.sidebarCounts.complaints,
-    },
-    {
-        label: 'Suppressions',
-        section: 'suppressions',
-        href: sectionHref('suppressions'),
-        icon: Power,
-        count: props.sidebarCounts.suppressions,
-    },
-]);
-
-const configItems = computed(() => [
-    {
-        label: 'Workspace',
-        section: 'projects',
-        href: sectionHref('projects'),
-        icon: Cloud,
-    },
-    {
-        label: 'Sending source',
-        section: 'setup',
-        href: sectionHref('setup'),
-        icon: SlidersHorizontal,
-    },
-    {
-        label: 'Domains',
-        section: 'identities',
-        href: sectionHref('identities'),
-        icon: MailCheck,
-    },
-    {
-        label: 'Templates',
-        section: 'templates',
-        href: sectionHref('templates'),
-        icon: FileText,
-    },
-    {
-        label: 'Webhooks',
-        section: 'webhooks',
-        href: sectionHref('webhooks'),
-        icon: Cloud,
-    },
-    {
-        label: 'API keys',
-        section: 'api-keys',
-        href: sectionHref('api-keys'),
-        icon: KeyRound,
-    },
-]);
-
 const isMailSection = computed(() =>
     ['activity', 'sent', 'bounces', 'complaints'].includes(props.section),
-);
-
-// Which global rail area owns the current section — drives which context
-// sidebar group renders.
-const activeArea = computed<'mail' | 'configure'>(() =>
-    [
-        'projects',
-        'setup',
-        'identities',
-        'templates',
-        'webhooks',
-        'api-keys',
-    ].includes(props.section)
-        ? 'configure'
-        : 'mail',
 );
 
 usePoll(
@@ -1127,7 +1007,7 @@ function enableInbound(domainId: number): void {
 const pageTitle = computed(() => {
     return (
         {
-            activity: 'Activity',
+            activity: 'Overview',
             sent: 'Sent',
             inbound: 'Inbound',
             bounces: 'Bounces',
@@ -1499,7 +1379,6 @@ function createProject(): void {
             projectForm.name = '';
             projectForm.slug = '';
             showProjectForm.value = false;
-            showProjectMenu.value = false;
         },
     });
 }
@@ -1522,7 +1401,6 @@ function updateProject(project: ProjectOption): void {
         preserveScroll: true,
         onSuccess: () => {
             editingProjectSlug.value = null;
-            showProjectMenu.value = false;
         },
     });
 }
@@ -1923,126 +1801,43 @@ function recipientTitle(email: EmailRow): string | undefined {
 </script>
 
 <template>
-    <Head :title="section.replace('-', ' ')" />
+    <Head :title="pageTitle" />
 
     <div
-        class="h-screen overflow-hidden bg-[#fbfaf7] font-sans text-[13px] text-zinc-900 antialiased dark:bg-[#0b0c0d] dark:text-[#e9eaec]"
+        class="h-screen overflow-hidden bg-[#fbfaf7] pb-16 font-sans text-sm text-zinc-900 antialiased lg:pb-0 dark:bg-[#0b0c0d] dark:text-[#e9eaec]"
     >
         <div
-            class="grid h-screen min-h-0 grid-cols-[56px_224px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]"
+            class="grid h-full min-h-0 grid-cols-1 grid-rows-[60px_minmax(0,1fr)] lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[64px_minmax(0,1fr)]"
         >
             <GlobalRail
                 class="col-start-1 row-span-2 row-start-1"
                 :project-path="projectBasePath"
-                :area="activeArea"
+                :project-name="project.name"
+                :project-slug="project.slug"
+                :section="section"
+                :projects="projects"
+                :counts="sidebarCounts"
                 :inbox-unread="inboxUnread"
+                :build-label="buildLabel"
             />
             <header
-                class="col-span-2 col-start-2 row-start-1 flex h-[52px] shrink-0 items-center gap-3 border-b border-zinc-200 bg-[#fbfaf7] px-3.5 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                class="col-start-1 row-start-1 flex min-w-0 items-center gap-2 border-b border-zinc-200 bg-[#fbfaf7] px-3 sm:gap-3 sm:px-4 lg:col-start-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
             >
-                <div
-                    class="flex h-full w-[210px] items-center gap-2 border-r border-zinc-200 pr-3 dark:border-[#1d2125]"
-                >
+                <div class="flex min-w-0 items-center gap-2.5 lg:hidden">
                     <Link
-                        :href="sectionHref('activity')"
-                        class="font-sans text-sm font-semibold tracking-tight"
-                        >larasend</Link
+                        href="/dashboard"
+                        class="grid size-8 shrink-0 place-items-center rounded-lg bg-teal-300 font-mono text-xs font-bold text-[#07221c]"
                     >
-                </div>
-
-                <div
-                    class="relative flex items-center gap-2 font-sans text-[12.5px] text-zinc-500 dark:text-[#9aa0a6]"
-                >
-                    <Link
-                        :href="sectionHref('projects')"
-                        class="hover:text-zinc-950 dark:hover:text-zinc-100"
-                        >Projects</Link
-                    >
-                    <span class="text-zinc-400 dark:text-[#4a4f55]">/</span>
-                    <button
-                        type="button"
-                        class="rounded px-1 py-0.5 font-medium text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                        @click="showProjectMenu = !showProjectMenu"
-                    >
-                        {{ project.slug }}
-                    </button>
-                    <span class="text-zinc-400 dark:text-[#4a4f55]">/</span>
-                    <span
-                        class="font-medium text-zinc-950 capitalize dark:text-zinc-100"
-                    >
-                        {{ section.replace('-', ' ') }}
+                        L
+                    </Link>
+                    <span class="min-w-0 truncate text-sm font-semibold">
+                        {{ project.name }}
                     </span>
-
-                    <div
-                        v-if="showProjectMenu"
-                        class="absolute top-8 left-14 z-40 w-[310px] overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl shadow-zinc-950/10 dark:border-[#1d2125] dark:bg-[#111315]"
-                    >
-                        <div
-                            class="border-b border-zinc-200 px-3 py-2 dark:border-[#1d2125]"
-                        >
-                            <div
-                                class="text-[11px] font-semibold tracking-widest text-zinc-500 uppercase"
-                            >
-                                {{ workspace.name }}
-                            </div>
-                            <div class="mt-1 text-xs text-zinc-500">
-                                Switch project or create a new isolated sending
-                                workspace.
-                            </div>
-                        </div>
-                        <div class="max-h-[260px] overflow-auto p-1">
-                            <Link
-                                v-for="item in projects"
-                                :key="item.slug"
-                                :href="item.href"
-                                class="grid grid-cols-[1fr_auto] gap-3 rounded-md px-2.5 py-2 hover:bg-zinc-100 dark:hover:bg-[#1a1e22]"
-                                :class="{
-                                    'bg-zinc-100 dark:bg-[#1a1e22]':
-                                        item.is_current,
-                                }"
-                            >
-                                <span class="min-w-0">
-                                    <span
-                                        class="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                                        >{{ item.name }}</span
-                                    >
-                                    <span
-                                        class="mt-0.5 block truncate font-mono text-[11px] text-zinc-500"
-                                        >{{ item.slug }} ·
-                                        {{ item.environment }} ·
-                                        {{
-                                            item.region ?? item.provider_label
-                                        }}</span
-                                    >
-                                </span>
-                                <span
-                                    class="text-right font-mono text-[11px] text-zinc-500"
-                                >
-                                    {{ item.emails_count }} sends<br />
-                                    {{ item.domains_count }} domains
-                                </span>
-                            </Link>
-                        </div>
-                        <div
-                            class="border-t border-zinc-200 p-2 dark:border-[#1d2125]"
-                        >
-                            <button
-                                type="button"
-                                class="w-full rounded-md border border-zinc-200 px-3 py-2 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-200 dark:hover:bg-[#1a1e22]"
-                                @click="
-                                    showProjectForm = true;
-                                    showProjectMenu = false;
-                                "
-                            >
-                                + New project
-                            </button>
-                        </div>
-                    </div>
                 </div>
 
                 <form
                     v-if="isMailSection"
-                    class="ml-auto flex h-8 w-[min(380px,30vw)] items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 text-[12.5px] text-zinc-500 dark:border-[#1d2125] dark:bg-[#111315] dark:text-[#9aa0a6]"
+                    class="ml-auto hidden h-9 w-[min(420px,34vw)] items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-[13px] text-zinc-500 sm:flex dark:border-[#1d2125] dark:bg-[#111315] dark:text-[#9aa0a6]"
                     @submit.prevent="applySearch"
                 >
                     <Search class="size-3.5" />
@@ -2069,158 +1864,20 @@ function recipientTitle(email: EmailRow): string | undefined {
                 <Link
                     v-else
                     :href="sectionHref('setup')"
-                    class="inline-flex h-8 items-center rounded-md border border-zinc-200 bg-white px-3 font-sans text-[12.5px] font-medium text-zinc-700 hover:bg-zinc-100 dark:border-[#1d2125] dark:bg-[#111315] dark:text-zinc-200 dark:hover:bg-[#16191c]"
+                    class="hidden h-9 items-center rounded-lg border border-zinc-200 bg-white px-3 font-sans text-[13px] font-medium text-zinc-700 hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:bg-[#111315] dark:text-zinc-200 dark:hover:bg-[#16191c]"
                 >
                     Setup guide
                 </Link>
                 <Link
                     :href="sectionHref('send')"
-                    class="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-300 px-3 font-sans text-[12.5px] font-semibold text-[#07221c] hover:brightness-105"
+                    class="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-300 px-3 font-sans text-[13px] font-semibold text-[#07221c] hover:brightness-105"
                 >
                     <Send class="size-3.5" /> Send
                 </Link>
             </header>
 
-            <aside
-                class="relative col-start-2 row-start-2 flex min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] px-2 py-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
-            >
-                <div
-                    class="min-h-0 flex-1 overflow-y-auto"
-                    :class="activeArea === 'mail' ? 'pb-28' : 'pb-10'"
-                >
-                    <template v-if="activeArea === 'mail'">
-                        <div
-                            class="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                        >
-                            Mail
-                        </div>
-                        <nav class="space-y-0.5">
-                            <Link
-                                v-for="item in navItems"
-                                :key="item.label"
-                                :href="item.href"
-                                class="group relative flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left font-sans text-[12.5px] text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                                :class="{
-                                    'bg-zinc-200/70 font-medium text-zinc-950 before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-r before:bg-teal-300 dark:bg-[#1a1e22] dark:text-zinc-100':
-                                        props.section === item.section,
-                                }"
-                            >
-                                <component :is="item.icon" class="size-3.5" />
-                                <span class="truncate">{{ item.label }}</span>
-                                <span
-                                    class="ml-auto font-mono text-[10.5px] text-zinc-500 dark:text-[#6c7177]"
-                                    >{{ item.count }}</span
-                                >
-                            </Link>
-                        </nav>
-                    </template>
-
-                    <div v-else>
-                        <div
-                            class="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                        >
-                            Configuration
-                        </div>
-                        <nav class="space-y-0.5">
-                            <Link
-                                v-for="item in configItems"
-                                :key="item.label"
-                                :href="item.href"
-                                class="relative flex h-7 w-full items-center gap-2.5 rounded-md px-2 text-left font-sans text-[12.5px] text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
-                                :class="{
-                                    'bg-zinc-200/70 font-medium text-zinc-950 before:absolute before:top-1.5 before:bottom-1.5 before:-left-2 before:w-0.5 before:rounded-r before:bg-teal-300 dark:bg-[#1a1e22] dark:text-zinc-100':
-                                        props.section === item.section,
-                                }"
-                            >
-                                <component :is="item.icon" class="size-3.5" />
-                                <span class="truncate">{{ item.label }}</span>
-                            </Link>
-                        </nav>
-                    </div>
-                </div>
-
-                <div
-                    v-if="activeArea === 'mail'"
-                    class="absolute right-2 bottom-3 left-2 rounded-lg border border-zinc-200 bg-white p-2.5 dark:border-[#1d2125] dark:bg-[#111315]"
-                >
-                    <div
-                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
-                    >
-                        {{ quotaTitle }}
-                    </div>
-                    <div
-                        class="mt-2 flex justify-between font-sans text-[11.5px] text-zinc-500 dark:text-[#9aa0a6]"
-                    >
-                        <span>{{ quota.sent.toLocaleString() }} sent</span>
-                        <span
-                            v-if="hasProviderQuota"
-                            class="font-mono text-zinc-900 dark:text-zinc-100"
-                            >{{ quotaPercent }}%</span
-                        >
-                        <span
-                            v-else
-                            class="font-mono text-zinc-900 dark:text-zinc-100"
-                            >30d</span
-                        >
-                    </div>
-                    <div
-                        v-if="hasProviderQuota"
-                        class="mt-2 h-1 rounded-full bg-zinc-200 dark:bg-[#1a1e22]"
-                    >
-                        <div
-                            class="h-1 rounded-full bg-teal-300"
-                            :style="{ width: `${quotaPercent}%` }"
-                        />
-                    </div>
-                    <div
-                        class="mt-2 flex justify-between border-t border-zinc-200 pt-2 font-sans text-[11.5px] text-zinc-500 dark:border-[#16191c] dark:text-[#9aa0a6]"
-                    >
-                        <span>{{
-                            hasProviderQuota ? 'Daily limit' : 'Provider quota'
-                        }}</span>
-                        <button
-                            v-if="!hasProviderQuota"
-                            type="button"
-                            class="inline-flex items-center gap-1 font-mono text-zinc-900 transition hover:text-teal-600 disabled:cursor-wait disabled:opacity-60 dark:text-zinc-100 dark:hover:text-teal-300"
-                            :disabled="syncingQuota"
-                            title="Sync provider sending quota from the configured source"
-                            @click="syncQuota()"
-                        >
-                            <RefreshCw
-                                class="size-3"
-                                :class="{ 'animate-spin': syncingQuota }"
-                            />
-                            {{ syncingQuota ? 'syncing' : 'sync' }}
-                        </button>
-                        <span
-                            v-else
-                            class="font-mono text-zinc-900 dark:text-zinc-100"
-                            >{{
-                                `${quota.limit?.toLocaleString()} / ${quota.rate ?? 'unknown'}/s`
-                            }}</span
-                        >
-                    </div>
-                    <div
-                        class="mt-1 truncate font-sans text-[10.5px] text-zinc-400 dark:text-[#6c7177]"
-                    >
-                        {{ quotaStatus }}
-                    </div>
-                    <div
-                        class="mt-2 border-t border-zinc-200 pt-2 font-mono text-[10px] text-zinc-400 dark:border-[#16191c] dark:text-[#6c7177]"
-                    >
-                        {{ buildLabel }}
-                    </div>
-                </div>
-                <div
-                    v-else
-                    class="absolute right-2 bottom-3 left-2 px-2 font-mono text-[10px] text-zinc-400 dark:text-[#6c7177]"
-                >
-                    {{ buildLabel }}
-                </div>
-            </aside>
-
             <main
-                class="col-start-3 row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden"
+                class="col-start-1 row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden lg:col-start-2"
             >
                 <div
                     v-if="showWorkerBanner"
@@ -2251,17 +1908,17 @@ function recipientTitle(email: EmailRow): string | undefined {
                     </span>
                 </div>
                 <section
-                    class="flex h-11 shrink-0 items-center gap-2.5 border-b border-zinc-200 px-3.5 dark:border-[#1d2125]"
+                    class="flex min-h-14 shrink-0 items-center gap-2.5 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
                 >
                     <div class="flex items-center gap-3">
                         <h1
-                            class="m-0 font-sans text-[15px] font-semibold tracking-tight"
+                            class="m-0 font-sans text-lg font-semibold tracking-tight"
                         >
                             {{ pageTitle }}
                         </h1>
                     </div>
                     <span
-                        class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-500 dark:border-[#1d2125] dark:text-[#9aa0a6]"
+                        class="hidden items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-500 sm:inline-flex dark:border-[#1d2125] dark:text-[#9aa0a6]"
                     >
                         <span
                             class="inline-block size-1.5 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(92,212,148,0.14)]"
@@ -2269,7 +1926,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                     </span>
                     <div
                         v-if="isMailSection"
-                        class="ml-auto flex rounded-lg border border-zinc-200 bg-white p-0.5 text-[11px] dark:border-[#1d2125] dark:bg-[#111315]"
+                        class="ml-auto hidden rounded-lg border border-zinc-200 bg-white p-0.5 text-xs md:flex dark:border-[#1d2125] dark:bg-[#111315]"
                     >
                         <button
                             v-for="range in ['1h', '24h', '7d', '14d', '30d']"
@@ -2294,20 +1951,20 @@ function recipientTitle(email: EmailRow): string | undefined {
 
                 <section
                     v-if="showMetrics"
-                    class="grid shrink-0 grid-cols-6 border-b border-zinc-200 dark:border-[#1d2125]"
+                    class="grid shrink-0 grid-cols-2 border-b border-zinc-200 sm:grid-cols-3 xl:grid-cols-6 dark:border-[#1d2125]"
                 >
                     <div
                         v-for="metric in metrics"
                         :key="metric.label"
-                        class="min-h-[54px] min-w-0 border-r border-zinc-200 px-3 py-2 last:border-r-0 hover:bg-zinc-100 dark:border-[#1d2125] dark:hover:bg-[#111315]"
+                        class="min-h-[68px] min-w-0 border-r border-b border-zinc-200 px-4 py-3 last:border-r-0 hover:bg-zinc-100 xl:border-b-0 dark:border-[#1d2125] dark:hover:bg-[#111315]"
                     >
                         <div
-                            class="truncate font-mono text-[9.5px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
+                            class="truncate font-mono text-[10px] font-medium tracking-widest text-zinc-500 uppercase dark:text-[#6c7177]"
                         >
                             {{ metric.label }}
                         </div>
                         <div
-                            class="mt-1 font-sans text-[17px] leading-none font-semibold tracking-tight text-zinc-950 dark:text-[#e9eaec]"
+                            class="mt-1.5 font-sans text-xl leading-none font-semibold tracking-tight text-zinc-950 dark:text-[#e9eaec]"
                         >
                             {{ metric.value }}
                         </div>

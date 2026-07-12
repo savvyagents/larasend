@@ -46,6 +46,18 @@ class InboxController extends Controller
                 'path' => '/projects/'.$project->slug,
                 'dashboard_path' => $context->sectionPath($project),
             ],
+            'projects' => $context->projectsFor($user)->map(function (Project $workspaceProject) use ($context, $project): array {
+                $source = $workspaceProject->sources->first();
+
+                return [
+                    'name' => $workspaceProject->name,
+                    'slug' => $workspaceProject->slug,
+                    'environment' => $source?->environment ?? $workspaceProject->default_environment,
+                    'provider_label' => $source?->provider->label() ?? 'Not connected',
+                    'is_current' => $workspaceProject->is($project),
+                    'href' => $context->sectionPath($workspaceProject, 'inbox'),
+                ];
+            })->values(),
             'canSend' => $project->workspace->canSendEmail($user),
             'mailbox' => $mailbox,
             'address' => $address,

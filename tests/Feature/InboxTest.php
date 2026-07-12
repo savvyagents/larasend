@@ -66,6 +66,10 @@ it('renders the inbox with threads, counts, and interleaved messages', function 
             ->where('threads.0.subject', 'Second conversation')
             ->has('selectedThread.messages', 1)
             ->where('selectedThread.reply_from', 'support@example.com')
+            ->has('projects', 1)
+            ->where('projects.0.name', 'helpdesk')
+            ->where('projects.0.is_current', true)
+            ->where('projects.0.href', '/projects/helpdesk/inbox')
             ->where('addresses.0.address', 'support@example.com'));
 });
 
