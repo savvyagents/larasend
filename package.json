@@ -36,6 +36,9 @@
     "dependencies": {
         "@inertiajs/vite": "^3.0.0",
         "@inertiajs/vue3": "^3.0.0",
+        "@tiptap/extensions": "^3.27.3",
+        "@tiptap/starter-kit": "^3.27.3",
+        "@tiptap/vue-3": "^3.27.3",
         "@vueuse/core": "^12.8.2",
         "chart.js": "^4.5.1",
         "class-variance-authority": "^0.7.1",

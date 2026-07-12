@@ -56,7 +56,7 @@ it('switches a source to cloudflare without requiring an ses region', function (
             'default_from_email' => 'receipts@example.com',
             'retention_days' => 90,
         ])
-        ->assertRedirect('/identities')
+        ->assertRedirect('/source')
         ->assertSessionHasNoErrors();
 
     $source = $project->sources()->firstOrFail();
@@ -83,7 +83,7 @@ it('derives the cloudflare account id from the token when left blank', function 
             'default_from_email' => 'receipts@example.com',
             'retention_days' => 90,
         ])
-        ->assertRedirect('/identities')
+        ->assertRedirect('/source')
         ->assertSessionHasNoErrors();
 
     expect($project->sources()->firstOrFail()->cloudflare_account_id)->toBe('acc-1234567890');

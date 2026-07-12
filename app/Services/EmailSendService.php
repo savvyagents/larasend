@@ -21,6 +21,7 @@ class EmailSendService
     public function __construct(
         private MimeMessageBuilder $mimeBuilder,
         private EmailProviderFactory $providers,
+        private ThreadResolver $threads,
     ) {}
 
     /**
@@ -92,6 +93,8 @@ class EmailSendService
                     'size' => strlen(base64_decode($attachment['content'], strict: true) ?: ''),
                 ]);
             }
+
+            $this->threads->attachOutbound($email);
 
             EmailActivityUpdated::dispatch($email);
             SendQueuedEmail::dispatch($email->id)->afterCommit();

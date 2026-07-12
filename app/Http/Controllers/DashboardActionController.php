@@ -19,6 +19,7 @@ use App\Models\User;
 use App\Models\WebhookEndpoint;
 use App\Services\DnsRecordVerifier;
 use App\Services\EmailSendService;
+use App\Services\Providers\CloudflareInboundProvisioner;
 use App\Services\Providers\DomainOnboardingException;
 use App\Services\Providers\EmailProviderFactory;
 use App\Support\ProjectContext;
@@ -166,7 +167,7 @@ class DashboardActionController extends Controller
                 : 'Source updated. '.implode(' ', $warnings),
         ]);
 
-        return $this->toProjectSection($project, 'identities');
+        return $this->toProjectSection($project, 'source');
     }
 
     public function syncSourceQuota(Request $request): RedirectResponse
@@ -185,7 +186,7 @@ class DashboardActionController extends Controller
                 Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
             }
 
-            return $this->toProjectSection($project, 'setup');
+            return $this->toProjectSection($project, 'source');
         } catch (Throwable $exception) {
             report($exception);
 
@@ -193,7 +194,7 @@ class DashboardActionController extends Controller
                 Inertia::flash('toast', ['type' => 'error', 'message' => "Could not sync {$provider->key()->label()} quota: ".$exception->getMessage()]);
             }
 
-            return $this->toProjectSection($project, 'setup');
+            return $this->toProjectSection($project, 'source');
         }
 
         $source->forceFill([
@@ -205,7 +206,7 @@ class DashboardActionController extends Controller
             Inertia::flash('toast', ['type' => 'success', 'message' => "{$provider->key()->label()} quota synced."]);
         }
 
-        return $this->toProjectSection($project, 'setup');
+        return $this->toProjectSection($project, 'source');
     }
 
     public function storeTemplate(StoreTemplateRequest $request): RedirectResponse
@@ -441,6 +442,52 @@ class DashboardActionController extends Controller
         $dnsVerifier->recheck($domain);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => 'DNS records re-checked.']);
+
+        return $this->toProjectSection($project, 'identities');
+    }
+
+    public function enableDomainInbound(Domain $domain, CloudflareInboundProvisioner $provisioner): RedirectResponse
+    {
+        return $this->provisionInbound($domain, $provisioner);
+    }
+
+    public function enableProjectDomainInbound(string $projectSlug, Domain $domain, CloudflareInboundProvisioner $provisioner): RedirectResponse
+    {
+        return $this->provisionInbound($domain, $provisioner);
+    }
+
+    private function provisionInbound(Domain $domain, CloudflareInboundProvisioner $provisioner): RedirectResponse
+    {
+        $project = $this->projectFor(Auth::user());
+        $this->authorizeWorkspaceCapability($project, 'manage_domains');
+
+        abort_unless($domain->project_id === $project->id, 404);
+
+        $source = $this->sourceFor($project);
+
+        if ($source->provider !== SourceProvider::Cloudflare) {
+            Inertia::flash('toast', ['type' => 'error', 'message' => 'Inbound email currently requires a Cloudflare source.']);
+
+            return $this->toProjectSection($project, 'identities');
+        }
+
+        try {
+            $provisioner->enable($source, $domain);
+        } catch (RuntimeException $exception) {
+            Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
+
+            // Also surfaced inline on the Receive email card: a transient
+            // toast is not enough feedback for an actionable failure.
+            return $this->toProjectSection($project, 'identities')
+                ->with('inboundError', $exception->getMessage());
+        }
+
+        $zoneApex = str($domain->domain)->explode('.')->slice(-2)->implode('.');
+
+        Inertia::flash('toast', [
+            'type' => 'success',
+            'message' => "Inbound email enabled. Mail sent to any address @{$zoneApex} now appears in the Inbound section.",
+        ]);
 
         return $this->toProjectSection($project, 'identities');
     }

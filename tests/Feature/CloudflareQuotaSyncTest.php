@@ -34,7 +34,7 @@ it('syncs cloudflare daily quota into the normalized shape', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota")
-        ->assertRedirect("/projects/{$project->slug}/setup");
+        ->assertRedirect("/projects/{$project->slug}/source");
 
     $source->refresh();
 
@@ -58,7 +58,7 @@ it('surfaces the workers paid plan entitlement error on quota sync', function ()
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota")
-        ->assertRedirect("/projects/{$project->slug}/setup");
+        ->assertRedirect("/projects/{$project->slug}/source");
 
     $toast = session('inertia.flash_data')['toast'] ?? null;
 
@@ -81,7 +81,7 @@ it('surfaces the missing token permission error on quota sync', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota")
-        ->assertRedirect("/projects/{$project->slug}/setup");
+        ->assertRedirect("/projects/{$project->slug}/source");
 
     $toast = session('inertia.flash_data')['toast'] ?? null;
 

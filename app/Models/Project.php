@@ -65,4 +65,14 @@ class Project extends Model
     {
         return $this->hasMany(Suppression::class);
     }
+
+    public function inboundEmails(): HasMany
+    {
+        return $this->hasMany(InboundEmail::class);
+    }
+
+    public function threads(): HasMany
+    {
+        return $this->hasMany(Thread::class);
+    }
 }

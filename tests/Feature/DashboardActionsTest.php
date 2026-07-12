@@ -115,7 +115,7 @@ it('configures a ses source and creates domain dns records', function () {
             'default_from_email' => 'receipts@example.com',
             'retention_days' => 180,
         ])
-        ->assertRedirect('/identities');
+        ->assertRedirect('/source');
 
     fakeSesIdentityCreation($user);
 
@@ -165,6 +165,17 @@ it('uses existing ses identity details when aws says the domain already exist', 
     expect($domain->dns_records)
         ->toHaveCount(3)
         ->and($domain->dns_records[0]['value'])->toContain('existing123');
+});
+
+it('accepts an email address when creating a sending identity', function () {
+    $user = User::factory()->create();
+    $project = fakeSesIdentityCreation($user);
+
+    $this->actingAs($user)
+        ->post('/domains', ['domain' => 'Vijay@Mail.Example.COM'])
+        ->assertRedirect('/identities');
+
+    expect($project->domains()->where('domain', 'mail.example.com')->exists())->toBeTrue();
 });
 
 it('re-checks domain dns records and stores status results', function () {
@@ -413,7 +424,7 @@ it('syncs ses source quota from aws', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota")
-        ->assertRedirect("/projects/{$project->slug}/setup");
+        ->assertRedirect("/projects/{$project->slug}/source");
 
     $source->refresh();
 
@@ -443,7 +454,7 @@ it('can sync ses quota silently for setup automation', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota", ['silent' => true])
-        ->assertRedirect("/projects/{$project->slug}/setup")
+        ->assertRedirect("/projects/{$project->slug}/source")
         ->assertSessionMissing('toast');
 
     expect($source->fresh()->last_quota['max_24_hour_send'])->toBe(1000);

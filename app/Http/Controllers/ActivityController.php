@@ -7,6 +7,7 @@ use App\Models\Email;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Suppression;
+use App\Models\Thread;
 use App\Models\User;
 use App\Models\WebhookDelivery;
 use App\Models\WebhookEndpoint;
@@ -43,6 +44,10 @@ class ActivityController extends Controller
         $source = $context->currentSource($project);
 
         $section = (string) $request->route('section', 'activity');
+
+        if ($section === 'sent') {
+            return redirect($context->sectionPath($project, 'outbound'));
+        }
 
         if ($section === 'send' && (! $source || ! $this->canSend($project, $source))) {
             $label = ($source?->provider ?? SourceProvider::Ses)->label();
@@ -137,7 +142,13 @@ class ActivityController extends Controller
                 'can_send' => $canSend,
                 'capabilities' => $this->sourceCapabilities($source),
             ] : null,
-            'domains' => $project->domains()->latest()->get(['id', 'domain', 'status', 'dns_records', 'verified_at']),
+            'domains' => $project->domains()->latest()->get(['id', 'domain', 'status', 'dns_records', 'verified_at', 'inbound_enabled_at']),
+            'inboundEmails' => $section === 'inbound'
+                ? $project->inboundEmails()
+                    ->latest('received_at')
+                    ->limit(50)
+                    ->get(['public_id', 'from_email', 'from_name', 'to_email', 'subject', 'text', 'html', 'attachments', 'received_at'])
+                : [],
             'templates' => $project->templates()->latest()->get(['slug', 'name', 'subject', 'html', 'text', 'variables', 'updated_at']),
             'webhooks' => $this->webhookEndpoints($project),
             'webhookStats' => $this->webhookStats($project),
@@ -149,14 +160,34 @@ class ActivityController extends Controller
                 : null,
             'apiKeys' => $project->apiKeys()->latest()->get(['id', 'name', 'prefix', 'scopes', 'last_used_at', 'last_used_ip', 'last_used_user_agent', 'expires_at', 'created_at']),
             'newApiKey' => session('newApiKey'),
+            'inboundError' => session('inboundError'),
             'setup' => $this->setup($project, $source, $context),
             'sidebarCounts' => [
                 'activity' => $project->emails()->count(),
+                'inbound' => $project->inboundEmails()->count(),
                 'sent' => $project->emails()->whereIn('status', ['sent', 'delivered', 'opened', 'clicked'])->count(),
                 'bounces' => $project->emails()->where('status', 'bounced')->count(),
                 'complaints' => $project->emails()->where('status', 'complained')->count(),
                 'suppressions' => $project->suppressions()->count(),
             ],
+            'inboxUnread' => $this->activeInboxThreads($project)->whereNull('read_at')->count(),
+            'recentThreads' => $section === 'activity'
+                ? $this->activeInboxThreads($project)
+                    ->orderByDesc('last_activity_at')
+                    ->limit(5)
+                    ->get([
+                        'public_id',
+                        'subject',
+                        'participants',
+                        'last_snippet',
+                        'last_direction',
+                        'message_count',
+                        'read_at',
+                        'last_activity_at',
+                    ])
+                    ->map(fn (Thread $thread): array => $this->serializeThreadSummary($thread))
+                    ->values()
+                : [],
             'quota' => $this->quota($project, $source),
             'system' => [
                 'worker_alive' => $this->systemHealth->workerIsAlive(),
@@ -186,14 +217,14 @@ class ActivityController extends Controller
                     'label' => 'Configure Cloudflare source',
                     'description' => 'Save the default sender, your Cloudflare account ID, and an API token with Email Sending Edit, Zone Read, and DNS Edit permissions.',
                     'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
-                    'href' => $context->sectionPath($project, 'identities'),
+                    'href' => $context->sectionPath($project, 'source'),
                 ]
                 : [
                     'key' => 'source',
                     'label' => 'Configure SES source',
                     'description' => 'Save the AWS region, default sender, and either IAM access keys or an attached production instance role.',
                     'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
-                    'href' => $context->sectionPath($project, 'identities'),
+                    'href' => $context->sectionPath($project, 'source'),
                 ],
             $isCloudflare
                 ? [
@@ -372,6 +403,34 @@ class ActivityController extends Controller
         }
 
         return $query;
+    }
+
+    private function activeInboxThreads(Project $project): HasMany
+    {
+        return $project->threads()
+            ->whereNull('archived_at')
+            ->where(function ($query): void {
+                $query->whereNull('snoozed_until')
+                    ->orWhere('snoozed_until', '<=', now());
+            });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeThreadSummary(Thread $thread): array
+    {
+        return [
+            'public_id' => $thread->public_id,
+            'subject' => $thread->subject,
+            'participants' => $thread->participants ?? [],
+            'snippet' => $thread->last_snippet,
+            'direction' => $thread->last_direction,
+            'message_count' => $thread->message_count,
+            'unread' => $thread->read_at === null,
+            'last_activity_at' => $thread->last_activity_at?->toIso8601String(),
+            'last_activity_human' => $thread->last_activity_at?->diffForHumans(short: true),
+        ];
     }
 
     /**
