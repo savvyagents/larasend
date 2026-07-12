@@ -15,6 +15,7 @@ import {
     SlidersHorizontal,
     Users,
     Webhook,
+    X,
 } from 'lucide-vue-next';
 import { computed, ref } from 'vue';
 
@@ -50,6 +51,7 @@ const page = usePage<{
     auth: { user: { name: string; email: string } };
 }>();
 const projectMenuOpen = ref(false);
+const mobileMenuOpen = ref(false);
 
 const userInitials = computed(() =>
     page.props.auth.user.name
@@ -194,16 +196,12 @@ const mobileItems = computed(() => [
         ...navigationGroups.value[2].items[0],
         label: 'Delivery',
     },
-    {
-        ...navigationGroups.value[4].items[0],
-        label: 'Settings',
-    },
 ]);
 </script>
 
 <template>
     <aside
-        class="hidden min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] lg:flex dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+        class="hidden min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] lg:col-start-1 lg:row-start-1 lg:row-end-3 lg:flex dark:border-[#1d2125] dark:bg-[#0b0c0d]"
     >
         <div class="border-b border-zinc-200 p-3 dark:border-[#1d2125]">
             <Link
@@ -342,6 +340,74 @@ const mobileItems = computed(() => [
         </div>
     </aside>
 
+    <button
+        v-if="mobileMenuOpen"
+        type="button"
+        class="fixed inset-0 z-50 bg-zinc-950/45 backdrop-blur-[2px] lg:hidden"
+        aria-label="Close navigation"
+        @click="mobileMenuOpen = false"
+    />
+
+    <section
+        v-if="mobileMenuOpen"
+        class="fixed right-0 bottom-16 left-0 z-[60] max-h-[78vh] overflow-y-auto rounded-t-2xl border-t border-zinc-200 bg-[#fbfaf7] px-4 pt-4 pb-6 shadow-2xl lg:hidden dark:border-[#262a2e] dark:bg-[#0b0c0d]"
+        aria-label="All navigation"
+    >
+        <div class="mb-4 flex items-center gap-3">
+            <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-semibold">{{ projectName }}</p>
+                <p class="truncate font-mono text-[11px] text-zinc-500">
+                    {{ projectSlug }}
+                </p>
+            </div>
+            <button
+                type="button"
+                class="grid size-9 place-items-center rounded-lg border border-zinc-200 text-zinc-500 dark:border-[#262a2e]"
+                aria-label="Close navigation"
+                @click="mobileMenuOpen = false"
+            >
+                <X class="size-4" />
+            </button>
+        </div>
+
+        <nav class="grid gap-5 sm:grid-cols-2">
+            <section
+                v-for="group in navigationGroups"
+                :key="group.label"
+                class="grid content-start gap-1"
+            >
+                <h2
+                    class="px-2 font-mono text-[10px] font-semibold tracking-[0.14em] text-zinc-400 uppercase dark:text-[#6c7177]"
+                >
+                    {{ group.label }}
+                </h2>
+                <Link
+                    v-for="item in group.items"
+                    :key="item.section"
+                    :href="item.href"
+                    class="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium"
+                    :class="
+                        section === item.section
+                            ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
+                            : 'text-zinc-600 dark:text-[#9aa0a6]'
+                    "
+                    @click="mobileMenuOpen = false"
+                >
+                    <component :is="item.icon" class="size-4 shrink-0" />
+                    <span class="min-w-0 flex-1 truncate">{{
+                        item.label
+                    }}</span>
+                    <span
+                        v-if="item.count"
+                        class="rounded-full bg-zinc-200 px-1.5 font-mono text-[10px] dark:bg-[#25292d]"
+                    >
+                        {{ item.count > 999 ? '999+' : item.count }}
+                    </span>
+                </Link>
+            </section>
+        </nav>
+    </section>
+
     <nav
         class="fixed right-0 bottom-0 left-0 z-50 grid h-16 grid-cols-5 border-t border-zinc-200 bg-[#fbfaf7]/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden dark:border-[#1d2125] dark:bg-[#0b0c0d]/95"
         aria-label="Primary navigation"
@@ -360,5 +426,15 @@ const mobileItems = computed(() => [
             <component :is="item.icon" class="size-5" />
             <span class="truncate">{{ item.label }}</span>
         </Link>
+        <button
+            type="button"
+            class="grid place-items-center content-center gap-1 text-[10px] font-medium text-zinc-500"
+            :class="{ 'text-teal-700 dark:text-teal-300': mobileMenuOpen }"
+            aria-label="Open all navigation"
+            @click="mobileMenuOpen = true"
+        >
+            <Settings2 class="size-5" />
+            <span>More</span>
+        </button>
     </nav>
 </template>

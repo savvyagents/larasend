@@ -10,6 +10,7 @@ import {
     Inbox as InboxIcon,
     Mail,
     MailOpen,
+    MoreHorizontal,
     Paperclip,
     PenSquare,
     Reply,
@@ -91,6 +92,7 @@ const props = defineProps<{
 
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
+const mobileThreadOpen = ref(false);
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 
 const inboxPath = computed(() => `${props.project.path}/inbox`);
@@ -124,6 +126,10 @@ const pageTitle = computed(() =>
 );
 
 function visitInbox(params: Record<string, string | null>): void {
+    if (params.thread === null) {
+        mobileThreadOpen.value = false;
+    }
+
     const query: Record<string, string> = {};
     const merged = {
         mailbox: props.mailbox,
@@ -158,6 +164,7 @@ function filterAddress(address: string): void {
 }
 
 function openThread(publicId: string): void {
+    mobileThreadOpen.value = true;
     visitInbox({ thread: publicId });
 }
 
@@ -258,7 +265,12 @@ function onKeydown(event: KeyboardEvent): void {
     }
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown));
+onMounted(() => {
+    mobileThreadOpen.value = new URLSearchParams(window.location.search).has(
+        'thread',
+    );
+    window.addEventListener('keydown', onKeydown);
+});
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
 usePoll(
@@ -340,6 +352,7 @@ function sendForward(): void {
 }
 
 const showSnoozeMenu = ref(false);
+const showThreadActions = ref(false);
 const snoozeOptions = [
     { key: 'later_today', label: 'Later today (3h)' },
     { key: 'tomorrow', label: 'Tomorrow 9am' },
@@ -553,7 +566,6 @@ function participantSummary(thread: ThreadRow): string {
         class="grid h-screen grid-cols-1 grid-rows-[60px_minmax(0,1fr)] bg-[#fbfaf7] pb-16 font-sans text-sm text-zinc-950 lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[64px_minmax(0,1fr)] lg:pb-0 dark:bg-[#090a0a] dark:text-zinc-100"
     >
         <GlobalRail
-            class="col-start-1 row-span-2 row-start-1"
             :project-path="project.path"
             :project-name="project.name"
             :project-slug="project.slug"
@@ -662,7 +674,11 @@ function participantSummary(thread: ThreadRow): string {
 
             <section
                 class="min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-zinc-200 md:grid dark:border-[#1d2125]"
-                :class="selectedThread ? 'hidden md:grid' : 'grid'"
+                :class="
+                    selectedThread && mobileThreadOpen
+                        ? 'hidden md:grid'
+                        : 'grid'
+                "
             >
                 <div
                     class="border-b border-zinc-200 p-2.5 dark:border-[#1d2125]"
@@ -762,7 +778,8 @@ function participantSummary(thread: ThreadRow): string {
 
             <section
                 v-if="selectedThread"
-                class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]"
+                class="min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] md:grid"
+                :class="mobileThreadOpen ? 'grid' : 'hidden'"
             >
                 <div
                     class="flex items-center gap-2 border-b border-zinc-200 px-3 py-3 sm:gap-3 sm:px-5 dark:border-[#1d2125]"
@@ -785,7 +802,7 @@ function participantSummary(thread: ThreadRow): string {
                     </div>
                     <button
                         type="button"
-                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 2xl:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                         :title="
                             selectedThread.unread ? 'Mark read' : 'Mark unread'
                         "
@@ -805,7 +822,7 @@ function participantSummary(thread: ThreadRow): string {
                     <div class="relative">
                         <button
                             type="button"
-                            class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                            class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 2xl:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                             :title="
                                 selectedThread.snoozed
                                     ? `Snoozed until ${selectedThread.snoozed_until_human}`
@@ -838,7 +855,7 @@ function participantSummary(thread: ThreadRow): string {
                     <button
                         v-if="canSend"
                         type="button"
-                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 lg:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 2xl:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                         title="Forward (f)"
                         @click="showForward = true"
                     >
@@ -847,7 +864,7 @@ function participantSummary(thread: ThreadRow): string {
                     </button>
                     <button
                         type="button"
-                        class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
+                        class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 2xl:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
                         @click="
                             threadAction(
                                 selectedThread.archived
@@ -863,6 +880,108 @@ function participantSummary(thread: ThreadRow): string {
                         <Archive v-else class="size-3.5" />
                         {{ selectedThread.archived ? 'Restore' : 'Archive' }}
                     </button>
+                    <div class="relative 2xl:hidden">
+                        <button
+                            type="button"
+                            class="grid size-9 place-items-center rounded-lg border border-zinc-200 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 dark:border-[#1d2125] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
+                            aria-label="Conversation actions"
+                            @click="showThreadActions = !showThreadActions"
+                        >
+                            <MoreHorizontal class="size-4" />
+                        </button>
+                        <div
+                            v-if="showThreadActions"
+                            class="absolute top-full right-0 z-30 mt-1 grid w-52 gap-0.5 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-[#1d2125] dark:bg-[#111315]"
+                        >
+                            <button
+                                type="button"
+                                class="flex min-h-9 items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#1a1e22]"
+                                @click="
+                                    showThreadActions = false;
+                                    threadAction(
+                                        selectedThread.unread
+                                            ? 'read'
+                                            : 'unread',
+                                    );
+                                "
+                            >
+                                <MailOpen
+                                    v-if="selectedThread.unread"
+                                    class="size-3.5"
+                                />
+                                <Mail v-else class="size-3.5" />
+                                Mark
+                                {{ selectedThread.unread ? 'read' : 'unread' }}
+                            </button>
+                            <button
+                                v-if="selectedThread.snoozed"
+                                type="button"
+                                class="flex min-h-9 items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#1a1e22]"
+                                @click="
+                                    showThreadActions = false;
+                                    threadAction('unsnooze');
+                                "
+                            >
+                                <AlarmClock class="size-3.5" />
+                                Unsnooze
+                            </button>
+                            <template v-else>
+                                <p
+                                    class="px-2.5 pt-1 font-mono text-[9.5px] tracking-widest text-zinc-400 uppercase"
+                                >
+                                    Snooze
+                                </p>
+                                <button
+                                    v-for="option in snoozeOptions"
+                                    :key="option.key"
+                                    type="button"
+                                    class="flex min-h-8 items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#1a1e22]"
+                                    @click="
+                                        showThreadActions = false;
+                                        snoozeThread(option.key);
+                                    "
+                                >
+                                    <AlarmClock class="size-3.5" />
+                                    {{ option.label }}
+                                </button>
+                            </template>
+                            <button
+                                v-if="canSend"
+                                type="button"
+                                class="flex min-h-9 items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#1a1e22]"
+                                @click="
+                                    showThreadActions = false;
+                                    showForward = true;
+                                "
+                            >
+                                <Forward class="size-3.5" />
+                                Forward
+                            </button>
+                            <button
+                                type="button"
+                                class="flex min-h-9 items-center gap-2 rounded-md px-2.5 text-left text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-[#1a1e22]"
+                                @click="
+                                    showThreadActions = false;
+                                    threadAction(
+                                        selectedThread.archived
+                                            ? 'unarchive'
+                                            : 'archive',
+                                    );
+                                "
+                            >
+                                <ArchiveRestore
+                                    v-if="selectedThread.archived"
+                                    class="size-3.5"
+                                />
+                                <Archive v-else class="size-3.5" />
+                                {{
+                                    selectedThread.archived
+                                        ? 'Restore'
+                                        : 'Archive'
+                                }}
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="grid min-h-0 content-start gap-3 overflow-auto p-5">

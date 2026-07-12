@@ -331,7 +331,7 @@ const buildLabel = computed(() => {
 
     return sha ? `v${version} · ${sha}` : `v${version}`;
 });
-const selected = ref<Partial<EmailDetail> | null>(props.selectedEmail);
+const selected = ref<Partial<EmailDetail> | null>(null);
 const activeTab = ref<'timeline' | 'preview' | 'headers' | 'metrics'>(
     'preview',
 );
@@ -365,6 +365,9 @@ const checkingDomainId = ref<number | null>(null);
 const deletingDomainId = ref<number | null>(null);
 const copiedDnsKey = ref<string | null>(null);
 const inspectorWidth = ref(600);
+const mailLayoutStyle = computed<Record<string, string>>(() => ({
+    '--inspector-width': `${inspectorWidth.value}px`,
+}));
 const isResizingInspector = ref(false);
 const editingProjectSlug = ref<string | null>(null);
 const archivingProjectSlug = ref<string | null>(null);
@@ -1810,7 +1813,6 @@ function recipientTitle(email: EmailRow): string | undefined {
             class="grid h-full min-h-0 grid-cols-1 grid-rows-[60px_minmax(0,1fr)] lg:grid-cols-[248px_minmax(0,1fr)] lg:grid-rows-[64px_minmax(0,1fr)]"
         >
             <GlobalRail
-                class="col-start-1 row-span-2 row-start-1"
                 :project-path="projectBasePath"
                 :project-name="project.name"
                 :project-slug="project.slug"
@@ -2285,12 +2287,12 @@ function recipientTitle(email: EmailRow): string | undefined {
 
                 <div
                     v-else-if="isMailSection"
-                    class="grid min-h-0 flex-1 overflow-hidden"
-                    :style="{
-                        gridTemplateColumns: selected
-                            ? `minmax(0, 1fr) ${inspectorWidth}px`
-                            : 'minmax(0, 1fr)',
+                    class="relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden"
+                    :class="{
+                        'lg:[grid-template-columns:minmax(0,1fr)_var(--inspector-width)]':
+                            selected,
                     }"
+                    :style="mailLayoutStyle"
                 >
                     <section
                         class="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-zinc-200 dark:border-[#1d2125]"
@@ -2327,7 +2329,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                         </div>
 
                         <div
-                            class="grid shrink-0 grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] gap-3 border-b border-zinc-200 px-3.5 py-1.5 font-mono text-[10.5px] tracking-widest text-zinc-500 uppercase dark:border-[#1d2125] dark:text-[#6c7177]"
+                            class="hidden shrink-0 grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] gap-3 border-b border-zinc-200 px-3.5 py-1.5 font-mono text-[10.5px] tracking-widest text-zinc-500 uppercase lg:grid dark:border-[#1d2125] dark:text-[#6c7177]"
                         >
                             <div></div>
                             <div>Subject · Recipient</div>
@@ -2351,7 +2353,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 <button
                                     v-for="email in group.rows"
                                     :key="email.id"
-                                    class="relative grid h-11 w-full min-w-[700px] grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] items-center gap-3 border-b border-zinc-100 px-3.5 text-left hover:bg-white dark:border-[#16191c] dark:hover:bg-[#111315]"
+                                    class="relative grid min-h-14 w-full grid-cols-[12px_minmax(0,1fr)_auto] items-center gap-3 border-b border-zinc-100 px-3.5 py-2 text-left hover:bg-white lg:h-11 lg:min-h-0 lg:min-w-[700px] lg:grid-cols-[22px_minmax(320px,1fr)_90px_110px_70px] lg:py-0 dark:border-[#16191c] dark:hover:bg-[#111315]"
                                     :class="{
                                         'bg-zinc-100 before:absolute before:top-0 before:bottom-0 before:left-0 before:w-0.5 before:bg-teal-300 dark:bg-[#1a1e22]':
                                             selected?.id === email.id,
@@ -2380,7 +2382,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         >
                                     </span>
                                     <span
-                                        class="inline-flex gap-2 font-mono text-[11px] text-zinc-500 dark:text-[#6c7177]"
+                                        class="hidden gap-2 font-mono text-[11px] text-zinc-500 lg:inline-flex dark:text-[#6c7177]"
                                     >
                                         <span
                                             :class="{
@@ -2407,7 +2409,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         >
                                     </span>
                                     <span
-                                        class="text-right font-mono text-[11px] text-zinc-500 dark:text-[#6c7177]"
+                                        class="hidden text-right font-mono text-[11px] text-zinc-500 lg:block dark:text-[#6c7177]"
                                         >{{ email.time }}</span
                                     >
                                 </button>
@@ -2417,11 +2419,11 @@ function recipientTitle(email: EmailRow): string | undefined {
 
                     <aside
                         v-if="selected"
-                        class="relative flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-zinc-200 bg-[#fbfaf7] dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                        class="fixed inset-x-0 top-[60px] bottom-16 z-40 flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-zinc-200 bg-[#fbfaf7] lg:relative lg:inset-auto lg:z-auto dark:border-[#1d2125] dark:bg-[#0b0c0d]"
                     >
                         <button
                             type="button"
-                            class="absolute top-0 bottom-0 left-0 z-10 w-2 cursor-col-resize border-l border-transparent hover:border-teal-300 focus-visible:border-teal-300 focus-visible:outline-none"
+                            class="absolute top-0 bottom-0 left-0 z-10 hidden w-2 cursor-col-resize border-l border-transparent hover:border-teal-300 focus-visible:border-teal-300 focus-visible:outline-none lg:block"
                             :class="{
                                 'border-teal-300 bg-teal-300/10':
                                     isResizingInspector,
