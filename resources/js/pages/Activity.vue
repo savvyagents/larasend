@@ -2519,12 +2519,12 @@ function recipientTitle(email: EmailRow): string | undefined {
                             </button>
                         </div>
 
-                        <div class="grid max-w-6xl gap-3">
+                        <div class="grid max-w-6xl min-w-0 gap-3">
                             <div
-                                class="grid overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-[#1d2125] dark:bg-[#101111]"
+                                class="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-[#1d2125] dark:bg-[#101111]"
                             >
                                 <div
-                                    class="grid grid-cols-[minmax(280px,1fr)_120px_120px_120px_130px_220px] border-b border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:border-[#1d2125] dark:bg-[#111315]"
+                                    class="grid min-w-[970px] grid-cols-[minmax(280px,1fr)_120px_120px_120px_130px_180px] border-b border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:border-[#1d2125] dark:bg-[#111315]"
                                 >
                                     <div>Project</div>
                                     <div>Environment</div>
@@ -2536,7 +2536,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 <div
                                     v-for="item in projects"
                                     :key="item.slug"
-                                    class="grid min-h-14 grid-cols-[minmax(280px,1fr)_120px_120px_120px_130px_220px] items-center gap-2 border-b border-zinc-200 px-3 py-2 text-sm last:border-b-0 dark:border-[#16191c]"
+                                    class="grid min-h-14 min-w-[970px] grid-cols-[minmax(280px,1fr)_120px_120px_120px_130px_180px] items-center gap-2 border-b border-zinc-200 px-3 py-2 text-sm last:border-b-0 dark:border-[#16191c]"
                                     :class="{
                                         'bg-teal-500/5 dark:bg-teal-500/10':
                                             item.is_current,
@@ -3580,7 +3580,11 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     {{ inboundError }}
                                 </div>
                                 <button
-                                    v-else-if="workspace.can_manage_domains"
+                                    v-if="
+                                        workspace.can_manage_domains &&
+                                        !selectedIdentity.inbound_enabled_at &&
+                                        !inboundError
+                                    "
                                     type="button"
                                     class="rounded-lg bg-teal-400 px-3 py-2 text-sm font-bold text-zinc-950 disabled:cursor-wait disabled:opacity-60"
                                     :disabled="
