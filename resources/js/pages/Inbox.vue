@@ -544,13 +544,13 @@ function participantSummary(thread: ThreadRow): string {
         class="grid h-screen grid-cols-[56px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)] bg-[#fbfaf7] font-sans text-[13px] text-zinc-950 dark:bg-[#090a0a] dark:text-zinc-100"
     >
         <GlobalRail
-            class="row-span-2"
+            class="col-start-1 row-span-2 row-start-1"
             :project-path="project.path"
             area="inbox"
             :inbox-unread="counts.unread"
         />
         <header
-            class="col-start-2 flex items-center gap-3 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
+            class="col-start-2 row-start-1 flex items-center gap-3 border-b border-zinc-200 px-4 dark:border-[#1d2125]"
         >
             <div class="flex items-baseline gap-2">
                 <span class="font-semibold">{{ project.name }}</span>
@@ -577,7 +577,7 @@ function participantSummary(thread: ThreadRow): string {
         </header>
 
         <div
-            class="col-start-2 grid min-h-0 grid-cols-[200px_360px_minmax(0,1fr)]"
+            class="col-start-2 row-start-2 grid min-h-0 grid-cols-[200px_360px_minmax(0,1fr)]"
         >
             <aside
                 class="grid min-h-0 content-start gap-1 overflow-auto border-r border-zinc-200 p-3 dark:border-[#1d2125]"

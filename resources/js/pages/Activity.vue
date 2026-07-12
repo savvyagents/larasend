@@ -1932,13 +1932,13 @@ function recipientTitle(email: EmailRow): string | undefined {
             class="grid h-screen min-h-0 grid-cols-[56px_224px_minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]"
         >
             <GlobalRail
-                class="row-span-2"
+                class="col-start-1 row-span-2 row-start-1"
                 :project-path="projectBasePath"
                 :area="activeArea"
                 :inbox-unread="inboxUnread"
             />
             <header
-                class="col-span-2 col-start-2 flex h-[52px] shrink-0 items-center gap-3 border-b border-zinc-200 bg-[#fbfaf7] px-3.5 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                class="col-span-2 col-start-2 row-start-1 flex h-[52px] shrink-0 items-center gap-3 border-b border-zinc-200 bg-[#fbfaf7] px-3.5 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
             >
                 <div
                     class="flex h-full w-[210px] items-center gap-2 border-r border-zinc-200 pr-3 dark:border-[#1d2125]"
@@ -2082,7 +2082,7 @@ function recipientTitle(email: EmailRow): string | undefined {
             </header>
 
             <aside
-                class="relative row-start-2 flex min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] px-2 py-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
+                class="relative col-start-2 row-start-2 flex min-h-0 flex-col border-r border-zinc-200 bg-[#fbfaf7] px-2 py-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
             >
                 <div
                     class="min-h-0 flex-1 overflow-y-auto"
@@ -2220,7 +2220,7 @@ function recipientTitle(email: EmailRow): string | undefined {
             </aside>
 
             <main
-                class="row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden"
+                class="col-start-3 row-start-2 flex min-h-0 min-w-0 flex-col overflow-hidden"
             >
                 <div
                     v-if="showWorkerBanner"
