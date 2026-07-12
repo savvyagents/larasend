@@ -167,7 +167,7 @@ class DashboardActionController extends Controller
                 : 'Source updated. '.implode(' ', $warnings),
         ]);
 
-        return $this->toProjectSection($project, 'identities');
+        return $this->toProjectSection($project, 'source');
     }
 
     public function syncSourceQuota(Request $request): RedirectResponse
@@ -186,7 +186,7 @@ class DashboardActionController extends Controller
                 Inertia::flash('toast', ['type' => 'error', 'message' => $exception->getMessage()]);
             }
 
-            return $this->toProjectSection($project, 'setup');
+            return $this->toProjectSection($project, 'source');
         } catch (Throwable $exception) {
             report($exception);
 
@@ -194,7 +194,7 @@ class DashboardActionController extends Controller
                 Inertia::flash('toast', ['type' => 'error', 'message' => "Could not sync {$provider->key()->label()} quota: ".$exception->getMessage()]);
             }
 
-            return $this->toProjectSection($project, 'setup');
+            return $this->toProjectSection($project, 'source');
         }
 
         $source->forceFill([
@@ -206,7 +206,7 @@ class DashboardActionController extends Controller
             Inertia::flash('toast', ['type' => 'success', 'message' => "{$provider->key()->label()} quota synced."]);
         }
 
-        return $this->toProjectSection($project, 'setup');
+        return $this->toProjectSection($project, 'source');
     }
 
     public function storeTemplate(StoreTemplateRequest $request): RedirectResponse

@@ -75,7 +75,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ->whereNumber('index')
             ->name('inbound.attachments');
         Route::get('{section}', ActivityController::class)
-            ->where('section', 'activity|sent|inbound|bounces|complaints|suppressions|identities|templates|webhooks|api-keys|send|setup|projects')
+            ->where('section', 'activity|sent|inbound|bounces|complaints|suppressions|source|identities|templates|webhooks|api-keys|send|setup|projects')
             ->name('section');
     });
 
@@ -93,6 +93,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('api-keys', ActivityController::class)->defaults('section', 'api-keys')->name('api-keys');
     Route::get('send', ActivityController::class)->defaults('section', 'send')->name('send');
     Route::get('setup', ActivityController::class)->defaults('section', 'setup')->name('setup');
+    Route::get('source', ActivityController::class)->defaults('section', 'source')->name('source');
     Route::post('domains', [DashboardActionController::class, 'storeDomain'])->name('domains.store');
     Route::post('domains/{domain}/check-dns', [DashboardActionController::class, 'checkDomain'])->name('domains.check-dns');
     Route::post('domains/{domain}/inbound', [DashboardActionController::class, 'enableDomainInbound'])->name('domains.inbound');

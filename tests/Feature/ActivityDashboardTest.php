@@ -232,6 +232,7 @@ it('renders production setup checklist with onboarding links', function () {
             ->where('section', 'setup')
             ->has('setup.steps', 5)
             ->where('setup.steps.0.key', 'source')
+            ->where('setup.steps.0.href', '/projects/my-project/source')
             ->where('setup.steps.2.key', 'webhook')
             ->where('setup.steps.2.complete', false)
             ->where('setup.steps.2.status', 'Webhook URL ready')

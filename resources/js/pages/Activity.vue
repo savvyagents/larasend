@@ -25,6 +25,7 @@ import {
     ref,
     watch,
 } from 'vue';
+import EmailProviderPanel from '@/components/EmailProviderPanel.vue';
 import GlobalRail from '@/components/GlobalRail.vue';
 import { Toaster } from '@/components/ui/sonner';
 
@@ -143,8 +144,6 @@ type ArchivedProjectOption = Omit<
 > & {
     archived_at: string | null;
 };
-
-type HealthTone = 'success' | 'warning' | 'neutral';
 
 type NewWebhookEndpoint = {
     id: string;
@@ -353,7 +352,6 @@ const selectedRange = ref(props.filters.range || '14d');
 const showProjectForm = ref(false);
 const selectedIdentityDomain = ref(props.domains[0]?.domain ?? '');
 const showNewIdentity = ref(false);
-const showSourceSettings = ref(false);
 const revealedApiKey = ref(props.newApiKey);
 const apiKeyCopied = ref(false);
 const showWebhookForm = ref(false);
@@ -381,21 +379,6 @@ let copiedDnsTimer: ReturnType<typeof window.setTimeout> | null = null;
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 let resizeStartX = 0;
 let resizeStartWidth = 0;
-const sourceForm = reactive({
-    name: props.source?.name ?? 'Production',
-    environment: props.source?.environment ?? props.project.environment,
-    provider: (props.source?.provider ?? 'ses') as SourceProvider,
-    ses_region: props.source?.ses_region ?? props.project.region ?? 'us-east-1',
-    ses_configuration_set: props.source?.ses_configuration_set ?? '',
-    cloudflare_account_id: props.source?.cloudflare_account_id ?? '',
-    cloudflare_api_token: '',
-    default_from_name: props.source?.default_from_name ?? 'Larasend',
-    default_from_email: props.source?.default_from_email ?? '',
-    aws_access_key_id: '',
-    aws_secret_access_key: '',
-    aws_session_token: '',
-    retention_days: props.source?.retention_days ?? 90,
-});
 const domainForm = useForm({ domain: '' });
 const templateForm = reactive({
     slug: '',
@@ -604,40 +587,6 @@ const isCloudflare = computed(() => props.source?.provider === 'cloudflare');
 const providerLabel = computed(
     () => props.source?.provider_label ?? 'Amazon SES',
 );
-const cloudflareTokenUrl = computed(() => {
-    // Email Sending Edit to send, Zone Read + DNS Edit so Larasend can
-    // onboard sending domains and publish their records automatically.
-    const permissions = encodeURIComponent(
-        JSON.stringify([
-            { key: 'email_sending', type: 'edit' },
-            { key: 'zone', type: 'read' },
-            { key: 'dns', type: 'edit' },
-        ]),
-    );
-
-    return `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${permissions}&name=Larasend%20Email%20Sending`;
-});
-const quotaStatus = computed(() => {
-    if (!props.source) {
-        return 'source missing';
-    }
-
-    if (props.quota.checkedAt) {
-        return `last synced ${relativeTime(props.quota.checkedAt)}`;
-    }
-
-    return 'sync required';
-});
-const quotaDetail = computed(() => {
-    if (!props.quota.limit) {
-        return 'Provider quota not synced yet.';
-    }
-
-    const used = props.quota.sentLast24Hours ?? 0;
-    const rate = props.quota.rate ? `${props.quota.rate}/s` : 'rate unknown';
-
-    return `${used.toLocaleString()} used in the last 24h · ${rate}`;
-});
 const quotaIsStale = computed(() => {
     if (!props.source) {
         return false;
@@ -658,132 +607,12 @@ const verifiedDomain = computed(() =>
         ['verified', 'local'].includes(domain.status),
     ),
 );
-const activeWebhookCount = computed(
-    () =>
-        props.webhooks.filter(
-            (webhook) => webhook.configured_status !== 'paused',
-        ).length,
-);
-const credentialMode = computed(() => {
-    if (!props.source) {
-        return 'Not configured';
-    }
-
-    if (props.source.provider === 'cloudflare') {
-        return props.source.has_cloudflare_credentials
-            ? 'Cloudflare API token'
-            : 'Missing API token';
-    }
-
-    if (props.source.uses_instance_role) {
-        return 'EC2 instance role';
-    }
-
-    if (props.source.has_aws_credentials) {
-        return props.source.has_aws_session_token
-            ? 'STS credentials'
-            : 'Stored IAM keys';
-    }
-
-    return 'Missing credentials';
-});
-const hasCredentials = computed(() =>
-    isCloudflare.value
-        ? Boolean(props.source?.has_cloudflare_credentials)
-        : Boolean(
-              props.source?.has_aws_credentials ||
-              props.source?.uses_instance_role,
-          ),
-);
-const setupWebhookStep = computed(() =>
-    props.setup.steps.find((step) => step.key === 'webhook'),
-);
-const setupHealthCards = computed<
-    { label: string; value: string; meta: string; tone: HealthTone }[]
->(() => [
-    {
-        label: 'Credentials',
-        value: credentialMode.value,
-        meta: props.source?.default_from_email
-            ? props.source.default_from_email
-            : 'Default sender missing',
-        tone: hasCredentials.value ? 'success' : 'warning',
-    },
-    {
-        label: 'Domain',
-        value: verifiedDomain.value?.domain ?? 'Not verified',
-        meta: verifiedDomain.value
-            ? `${props.project.region ?? providerLabel.value} verified`
-            : `${props.domains.length.toLocaleString()} configured`,
-        tone: verifiedDomain.value ? 'success' : 'warning',
-    },
-    {
-        label: 'Quota',
-        value: props.quota.limit
-            ? `${props.quota.limit.toLocaleString()} / ${isCloudflare.value ? 'day' : '24h'}`
-            : syncingQuota.value
-              ? 'Syncing'
-              : 'Needs sync',
-        meta: props.quota.rate
-            ? `${props.quota.rate}/s send rate`
-            : quotaStatus.value,
-        tone: props.quota.limit ? 'success' : 'warning',
-    },
-    isCloudflare.value
-        ? {
-              label: 'Events',
-              value: 'Suppression sync',
-              meta: 'Cloudflare has no event webhooks; suppressions sync hourly',
-              tone: 'neutral' as HealthTone,
-          }
-        : {
-              label: 'Events',
-              value: setupWebhookStep.value?.complete
-                  ? 'Events received'
-                  : props.sesWebhookUrl
-                    ? 'Webhook URL ready'
-                    : 'Source missing',
-              meta: activeWebhookCount.value
-                  ? `${activeWebhookCount.value.toLocaleString()} outbound active`
-                  : (setupWebhookStep.value?.status ?? 'Waiting for SES event'),
-              tone: setupWebhookStep.value?.complete
-                  ? 'success'
-                  : props.sesWebhookUrl
-                    ? 'warning'
-                    : 'neutral',
-          },
-    {
-        label: 'API keys',
-        value: props.apiKeys.length
-            ? props.apiKeys.length.toLocaleString()
-            : 'None',
-        meta: props.apiKeys.some((key) => key.last_used_at)
-            ? 'Has recent usage'
-            : 'No usage yet',
-        tone: props.apiKeys.length ? 'success' : 'neutral',
-    },
-    {
-        label: 'Queue worker',
-        value: props.system.worker_alive ? 'Running' : 'Not detected',
-        meta: props.system.worker_alive
-            ? `last seen ${props.system.worker_last_seen}`
-            : 'Emails will not send. Run: php artisan queue:work',
-        tone: props.system.worker_alive ? 'success' : 'warning',
-    },
-    {
-        label: 'Scheduler',
-        value: props.system.scheduler_alive ? 'Running' : 'Not detected',
-        meta: props.system.scheduler_alive
-            ? `last ran ${props.system.scheduler_last_seen}`
-            : 'DNS checks, quota, and suppressions will not refresh',
-        tone: props.system.scheduler_alive ? 'success' : 'warning',
-    },
-]);
 const showWorkerBanner = computed(
     () =>
         !props.system.worker_alive &&
-        props.system.stuck_queued > 0 &&
-        (isMailSection.value || props.section === 'send'),
+        (props.section === 'activity' ||
+            props.section === 'send' ||
+            (props.system.stuck_queued > 0 && isMailSection.value)),
 );
 const complaintRate = computed(
     () =>
@@ -1016,7 +845,8 @@ const pageTitle = computed(() => {
             bounces: 'Bounces',
             complaints: 'Complaints',
             suppressions: 'Suppressions',
-            setup: 'Sending source',
+            source: 'Email provider',
+            setup: 'Project setup',
             identities: 'Domains',
             templates: 'Templates',
             webhooks: 'Webhooks',
@@ -1026,10 +856,6 @@ const pageTitle = computed(() => {
         }[props.section] ?? props.section.replace('-', ' ')
     );
 });
-function saveSource(): void {
-    router.put(projectAction('/source'), sourceForm, { preserveScroll: true });
-}
-
 function syncQuota(silent = false): void {
     syncingQuota.value = true;
 
@@ -1048,7 +874,7 @@ function syncQuota(silent = false): void {
 
 function syncQuotaIfStale(): void {
     if (
-        props.section !== 'setup' ||
+        props.section !== 'source' ||
         attemptedAutoQuotaSync.value ||
         syncingQuota.value ||
         !quotaIsStale.value
@@ -1678,16 +1504,6 @@ function dotClass(status: string): string {
     );
 }
 
-function healthToneClass(tone: HealthTone): string {
-    return (
-        {
-            success: 'bg-emerald-400',
-            warning: 'bg-amber-400',
-            neutral: 'bg-zinc-400',
-        }[tone] ?? 'bg-zinc-400'
-    );
-}
-
 function eventToneClass(type: string): string {
     return (
         {
@@ -1864,11 +1680,11 @@ function recipientTitle(email: EmailRow): string | undefined {
                     <RefreshCw class="size-3.5" />
                 </Link>
                 <Link
-                    v-else
+                    v-else-if="section !== 'setup'"
                     :href="sectionHref('setup')"
                     class="hidden h-9 items-center rounded-lg border border-zinc-200 bg-white px-3 font-sans text-[13px] font-medium text-zinc-700 hover:bg-zinc-100 sm:inline-flex dark:border-[#1d2125] dark:bg-[#111315] dark:text-zinc-200 dark:hover:bg-[#16191c]"
                 >
-                    Setup guide
+                    Project setup
                 </Link>
                 <Link
                     :href="sectionHref('send')"
@@ -1887,13 +1703,19 @@ function recipientTitle(email: EmailRow): string | undefined {
                 >
                     <AlertTriangle class="size-4 shrink-0" />
                     <span class="font-semibold">
-                        {{ system.stuck_queued }}
-                        {{
-                            system.stuck_queued === 1
-                                ? 'email is'
-                                : 'emails are'
-                        }}
-                        stuck in the queue and no queue worker is running.
+                        <template v-if="system.stuck_queued > 0">
+                            {{ system.stuck_queued }}
+                            {{
+                                system.stuck_queued === 1
+                                    ? 'email is'
+                                    : 'emails are'
+                            }}
+                            stuck in the queue.
+                        </template>
+                        <template v-else>
+                            Queue worker is not running. New email will remain
+                            queued.
+                        </template>
                     </span>
                     <span>
                         Start one with
@@ -3175,17 +2997,20 @@ function recipientTitle(email: EmailRow): string | undefined {
                         </div>
                     </div>
 
-                    <div v-else-if="section === 'setup'" class="grid gap-4">
-                        <div
+                    <div
+                        v-else-if="section === 'setup'"
+                        class="grid max-w-5xl gap-4"
+                    >
+                        <section
                             v-if="setup.next_step"
-                            class="max-w-5xl rounded-lg border border-teal-200 bg-teal-50 p-4 font-sans text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
+                            class="rounded-xl border border-teal-200 bg-teal-50 p-5 font-sans text-teal-950 dark:border-teal-400/20 dark:bg-teal-400/10 dark:text-teal-100"
                         >
                             <div
-                                class="flex flex-wrap items-center justify-between gap-3"
+                                class="flex flex-wrap items-center justify-between gap-4"
                             >
                                 <div>
                                     <div
-                                        class="font-mono text-[10px] tracking-widest text-teal-700 uppercase dark:text-teal-300"
+                                        class="font-mono text-[10px] font-semibold tracking-widest text-teal-700 uppercase dark:text-teal-300"
                                     >
                                         Next action
                                     </div>
@@ -3200,285 +3025,143 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </div>
                                 <Link
                                     :href="setup.next_step.href"
-                                    class="rounded-lg bg-teal-300 px-3 py-2 text-sm font-bold text-zinc-950 transition hover:brightness-105 active:translate-y-px"
+                                    class="rounded-lg bg-teal-300 px-4 py-2 text-sm font-semibold text-[#07221c] transition hover:brightness-105"
                                 >
-                                    Continue
+                                    Continue setup
                                 </Link>
                             </div>
-                        </div>
+                        </section>
 
-                        <div
-                            class="max-w-5xl rounded-lg border border-zinc-200 p-4 font-sans dark:border-zinc-800"
+                        <section
+                            v-else
+                            class="flex flex-wrap items-center gap-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5 font-sans text-emerald-950 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-100"
                         >
-                            <h2 class="text-lg font-semibold">
-                                Sending source
-                            </h2>
-                            <p class="mt-2 max-w-3xl text-sm text-zinc-500">
-                                Verify the source, domain, event webhooks, API
-                                key, and first send before routing production
-                                traffic through Larasend.
-                            </p>
-                            <div
-                                class="mt-5 grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3"
+                            <span
+                                class="grid size-9 place-items-center rounded-full bg-emerald-500/15"
                             >
-                                <div
-                                    v-for="card in setupHealthCards"
-                                    :key="card.label"
-                                    class="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                                >
-                                    <div
-                                        class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase"
+                                <Check class="size-5" />
+                            </span>
+                            <div class="min-w-0 flex-1">
+                                <h2 class="font-semibold">
+                                    Project setup is complete
+                                </h2>
+                                <p class="mt-1 text-sm opacity-80">
+                                    Your provider, domain, API access, and first
+                                    real send are ready.
+                                </p>
+                            </div>
+                            <Link
+                                :href="sectionHref('source')"
+                                class="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold hover:bg-emerald-100 dark:border-emerald-400/30 dark:hover:bg-emerald-400/10"
+                            >
+                                Manage provider
+                            </Link>
+                        </section>
+
+                        <section
+                            class="overflow-hidden rounded-xl border border-zinc-200 bg-white font-sans dark:border-[#25292d] dark:bg-[#111315]"
+                        >
+                            <div
+                                class="flex flex-wrap items-end justify-between gap-4 border-b border-zinc-200 p-5 dark:border-[#25292d]"
+                            >
+                                <div>
+                                    <h2 class="text-lg font-semibold">
+                                        Project setup
+                                    </h2>
+                                    <p
+                                        class="mt-1 max-w-2xl text-sm text-zinc-500"
                                     >
-                                        {{ card.label }}
-                                    </div>
-                                    <div
-                                        class="mt-2 flex items-center gap-2 text-sm font-semibold"
-                                    >
-                                        <span
-                                            class="size-2 rounded-full"
-                                            :class="healthToneClass(card.tone)"
-                                        />
-                                        <span class="truncate">{{
-                                            card.value
-                                        }}</span>
-                                    </div>
-                                    <div
-                                        class="mt-1 truncate text-xs text-zinc-500"
-                                    >
-                                        {{ card.meta }}
-                                    </div>
+                                        Complete these steps once before routing
+                                        production email through Larasend.
+                                    </p>
+                                </div>
+                                <div class="font-mono text-xs text-zinc-500">
+                                    {{
+                                        setup.steps.filter(
+                                            (step) => step.complete,
+                                        ).length
+                                    }}
+                                    of {{ setup.steps.length }} complete
                                 </div>
                             </div>
-                            <div class="mt-5 grid gap-3">
+                            <div
+                                class="divide-y divide-zinc-200 dark:divide-[#25292d]"
+                            >
                                 <div
                                     v-for="step in setup.steps"
                                     :key="step.key"
-                                    class="grid grid-cols-[32px_1fr_140px] items-center gap-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                                    class="flex flex-wrap items-center gap-4 p-4"
                                 >
-                                    <div
-                                        class="flex size-7 items-center justify-center rounded-full text-sm font-bold"
+                                    <span
+                                        class="grid size-8 shrink-0 place-items-center rounded-full"
                                         :class="
                                             step.complete
-                                                ? 'bg-teal-400 text-zinc-950'
-                                                : 'bg-zinc-200 text-zinc-500 dark:bg-zinc-900'
+                                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                                                : 'bg-amber-500/10 text-amber-600 dark:text-amber-300'
                                         "
                                     >
-                                        {{ step.complete ? '✓' : '·' }}
-                                    </div>
-                                    <div>
-                                        <div class="font-semibold">
-                                            {{ step.label }}
+                                        <Check
+                                            v-if="step.complete"
+                                            class="size-4"
+                                        />
+                                        <span
+                                            v-else
+                                            class="size-2 rounded-full bg-current"
+                                        />
+                                    </span>
+                                    <div class="min-w-0 flex-1">
+                                        <div
+                                            class="flex flex-wrap items-center gap-2"
+                                        >
+                                            <h3 class="font-semibold">
+                                                {{ step.label }}
+                                            </h3>
+                                            <span
+                                                class="font-mono text-[10px] font-semibold uppercase"
+                                                :class="
+                                                    step.complete
+                                                        ? 'text-emerald-600 dark:text-emerald-300'
+                                                        : 'text-amber-600 dark:text-amber-300'
+                                                "
+                                            >
+                                                {{
+                                                    step.complete
+                                                        ? 'Complete'
+                                                        : step.status ||
+                                                          'Required'
+                                                }}
+                                            </span>
                                         </div>
-                                        <div class="mt-1 text-sm text-zinc-500">
+                                        <p
+                                            v-if="!step.complete"
+                                            class="mt-1 max-w-3xl text-sm text-zinc-500"
+                                        >
                                             {{ step.description }}
-                                        </div>
+                                        </p>
                                     </div>
                                     <Link
+                                        v-if="!step.complete"
                                         :href="step.href"
-                                        class="rounded-lg border border-zinc-200 px-3 py-2 text-center text-sm font-semibold text-zinc-600 hover:text-zinc-950 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                        class="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-[#16191c]"
                                     >
-                                        {{
-                                            step.complete
-                                                ? 'Review'
-                                                : 'Configure'
-                                        }}
+                                        Open
                                     </Link>
                                 </div>
                             </div>
-                        </div>
-
-                        <div
-                            class="grid max-w-5xl gap-3 rounded-lg border border-zinc-200 p-4 font-sans text-sm dark:border-zinc-800"
-                        >
-                            <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h2 class="text-lg font-semibold">
-                                        {{
-                                            isCloudflare
-                                                ? 'Cloudflare wiring'
-                                                : 'AWS wiring'
-                                        }}
-                                    </h2>
-                                    <p class="mt-1 text-sm text-zinc-500">
-                                        {{ quotaStatus }}
-                                    </p>
-                                </div>
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-600 transition hover:text-zinc-950 disabled:cursor-wait disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
-                                    :disabled="syncingQuota"
-                                    title="Sync provider sending quota"
-                                    @click="syncQuota()"
-                                >
-                                    <RefreshCw
-                                        class="size-4"
-                                        :class="{
-                                            'animate-spin': syncingQuota,
-                                        }"
-                                    />
-                                    {{
-                                        syncingQuota
-                                            ? 'Syncing...'
-                                            : 'Sync quota'
-                                    }}
-                                </button>
-                            </div>
-                            <div class="grid gap-2 text-zinc-500">
-                                <div
-                                    class="grid gap-3 rounded-lg border border-zinc-200 p-3 text-zinc-700 dark:border-zinc-800 dark:text-zinc-300"
-                                >
-                                    <div class="grid gap-3 md:grid-cols-5">
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Source
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{
-                                                    source?.name || 'Production'
-                                                }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Credentials
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{ credentialMode }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Default sender
-                                            </div>
-                                            <div
-                                                class="mt-1 truncate font-semibold"
-                                            >
-                                                {{
-                                                    source?.default_from_email ||
-                                                    'Missing'
-                                                }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                {{
-                                                    isCloudflare
-                                                        ? 'Events'
-                                                        : 'SES events'
-                                                }}
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{
-                                                    isCloudflare
-                                                        ? 'Suppression sync'
-                                                        : setup.webhook_url
-                                                          ? 'Webhook ready'
-                                                          : 'Not configured'
-                                                }}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div
-                                                class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                                            >
-                                                Quota
-                                            </div>
-                                            <div class="mt-1 font-semibold">
-                                                {{ quotaDetail }}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <template v-if="isCloudflare">
-                                    <div>
-                                        1. Deploy the app with `APP_URL`,
-                                        database, queue worker, scheduler, and
-                                        HTTPS configured.
-                                    </div>
-                                    <div>
-                                        2. Enable the Workers Paid plan on the
-                                        Cloudflare account and make sure the
-                                        sending domain uses Cloudflare DNS.
-                                    </div>
-                                    <div>
-                                        3.
-                                        <a
-                                            :href="cloudflareTokenUrl"
-                                            target="_blank"
-                                            rel="noopener"
-                                            class="font-semibold text-zinc-950 underline dark:text-zinc-100"
-                                            >Create an API token</a
-                                        >
-                                        with Email Sending Edit, Zone Read, and
-                                        DNS Edit, then save it with your account
-                                        ID in the source settings. Add the
-                                        sending domain in Larasend and it is
-                                        onboarded in Cloudflare automatically.
-                                    </div>
-                                    <div>
-                                        4. Delivery events are limited to SMTP
-                                        accept/reject at send time; Cloudflare
-                                        suppressions sync into Larasend hourly.
-                                    </div>
-                                    <div>
-                                        5. Create an API key and set
-                                        `MAIL_MAILER=larasend`,
-                                        `LARASEND_API_KEY`, and
-                                        `LARASEND_ENDPOINT` in the Laravel app
-                                        that sends mail.
-                                    </div>
-                                </template>
-                                <template v-else>
-                                    <div>
-                                        1. Deploy the app with `APP_URL`,
-                                        database, queue worker, and HTTPS
-                                        configured.
-                                    </div>
-                                    <div>
-                                        2. Create an IAM user or role with SES
-                                        permissions for `ses:SendRawEmail`,
-                                        `ses:CreateEmailIdentity`,
-                                        `ses:GetEmailIdentity`,
-                                        `ses:GetSendQuota`, and
-                                        `ses:GetAccount`.
-                                    </div>
-                                    <div>
-                                        3. Save the SES source in Larasend, add
-                                        your sending domain, then publish the
-                                        DKIM records in Route 53 or your DNS
-                                        provider.
-                                    </div>
-                                    <div>
-                                        4. Configure SES event publishing
-                                        through SNS to this webhook URL:
-                                    </div>
-                                    <div
-                                        class="overflow-auto rounded-md bg-zinc-100 p-3 font-mono text-xs text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
-                                    >
-                                        {{
-                                            setup.webhook_url ||
-                                            'Save a source first'
-                                        }}
-                                    </div>
-                                    <div>
-                                        5. Create an API key and set
-                                        `MAIL_MAILER=larasend`,
-                                        `LARASEND_API_KEY`, and
-                                        `LARASEND_ENDPOINT` in the Laravel app
-                                        that sends mail.
-                                    </div>
-                                </template>
-                            </div>
-                        </div>
+                        </section>
                     </div>
+
+                    <EmailProviderPanel
+                        v-else-if="section === 'source'"
+                        :project-slug="project.slug"
+                        :project-path="projectBasePath"
+                        :can-manage="workspace.can_manage_domains"
+                        :source="source"
+                        :quota="quota"
+                        :verified-domain="verifiedDomain?.domain ?? null"
+                        :domain-count="domains.length"
+                        :webhook-url="setup.webhook_url"
+                    />
 
                     <div v-else-if="section === 'send'" class="grid gap-4">
                         <div
@@ -3500,10 +3183,10 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </div>
                             </div>
                             <Link
-                                :href="projectAction('/identities')"
+                                :href="sectionHref('source')"
                                 class="w-fit rounded-lg bg-amber-400 px-4 py-2 text-sm font-bold text-amber-950"
                             >
-                                Open identities
+                                Configure email provider
                             </Link>
                         </div>
                         <form
@@ -3790,20 +3473,6 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     </button>
                                     <button
                                         v-if="workspace.can_manage_domains"
-                                        class="rounded-lg border border-zinc-200 px-3 py-2 text-sm font-semibold text-zinc-600 transition hover:text-zinc-950 active:scale-[0.98] dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
-                                        @click="
-                                            showSourceSettings =
-                                                !showSourceSettings
-                                        "
-                                    >
-                                        {{
-                                            showSourceSettings
-                                                ? 'Hide source settings'
-                                                : 'Source settings'
-                                        }}
-                                    </button>
-                                    <button
-                                        v-if="workspace.can_manage_domains"
                                         class="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-500 transition hover:border-red-300 hover:bg-red-50 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 dark:border-red-500/20 dark:hover:bg-red-500/10"
                                         :disabled="
                                             deletingDomainId ===
@@ -4071,313 +3740,6 @@ function recipientTitle(email: EmailRow): string | undefined {
                                     </div>
                                 </div>
                             </div>
-
-                            <section
-                                v-if="showSourceSettings"
-                                class="mt-5 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
-                            >
-                                <div class="flex items-center justify-between">
-                                    <h3 class="font-semibold">
-                                        Source settings
-                                    </h3>
-                                    <button
-                                        class="text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-100"
-                                        title="Close source settings"
-                                        @click="showSourceSettings = false"
-                                    >
-                                        <X class="size-4" />
-                                    </button>
-                                </div>
-                                <form
-                                    class="mt-5 grid gap-4"
-                                    @submit.prevent="saveSource"
-                                >
-                                    <div
-                                        v-if="source?.uses_instance_role"
-                                        class="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-950 dark:border-teal-500/30 dark:bg-teal-500/10 dark:text-teal-100"
-                                    >
-                                        Production is using the EC2 instance
-                                        role. AWS key fields below are optional
-                                        overrides for self-hosted or non-role
-                                        deployments.
-                                    </div>
-                                    <div
-                                        class="grid gap-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">Source</div>
-                                        <div class="grid grid-cols-3 gap-4">
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Name</span
-                                                >
-                                                <input
-                                                    v-model="sourceForm.name"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Environment</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.environment
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Provider</span
-                                                >
-                                                <select
-                                                    v-model="
-                                                        sourceForm.provider
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                >
-                                                    <option value="ses">
-                                                        Amazon SES
-                                                    </option>
-                                                    <option value="cloudflare">
-                                                        Cloudflare Email Service
-                                                    </option>
-                                                </select>
-                                            </label>
-                                            <label
-                                                v-if="
-                                                    sourceForm.provider ===
-                                                    'ses'
-                                                "
-                                                class="grid gap-2 text-sm"
-                                            >
-                                                <span class="text-zinc-500"
-                                                    >SES region</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.ses_region
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="grid gap-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">
-                                            Default sender
-                                        </div>
-                                        <div class="grid gap-4 md:grid-cols-2">
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >Default from email</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.default_from_email
-                                                    "
-                                                    type="email"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    required
-                                                />
-                                            </label>
-                                            <label
-                                                v-if="
-                                                    sourceForm.provider ===
-                                                    'ses'
-                                                "
-                                                class="grid gap-2 text-sm"
-                                            >
-                                                <span class="text-zinc-500"
-                                                    >SES configuration set</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.ses_configuration_set
-                                                    "
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Optional"
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="grid gap-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">
-                                            Credentials
-                                        </div>
-                                        <div
-                                            v-if="
-                                                sourceForm.provider ===
-                                                'cloudflare'
-                                            "
-                                            class="grid gap-4"
-                                        >
-                                            <div
-                                                class="grid gap-4 md:grid-cols-2"
-                                            >
-                                                <label
-                                                    class="grid gap-2 text-sm"
-                                                >
-                                                    <span class="text-zinc-500"
-                                                        >Cloudflare account
-                                                        ID</span
-                                                    >
-                                                    <input
-                                                        v-model="
-                                                            sourceForm.cloudflare_account_id
-                                                        "
-                                                        autocomplete="off"
-                                                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                        placeholder="From the Cloudflare dashboard URL"
-                                                    />
-                                                </label>
-                                                <label
-                                                    class="grid gap-2 text-sm"
-                                                >
-                                                    <span class="text-zinc-500"
-                                                        >Cloudflare API
-                                                        token</span
-                                                    >
-                                                    <input
-                                                        v-model="
-                                                            sourceForm.cloudflare_api_token
-                                                        "
-                                                        type="password"
-                                                        autocomplete="new-password"
-                                                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                        placeholder="Leave blank to keep saved value"
-                                                    />
-                                                </label>
-                                            </div>
-                                            <p class="text-sm text-zinc-500">
-                                                <a
-                                                    :href="cloudflareTokenUrl"
-                                                    target="_blank"
-                                                    rel="noopener"
-                                                    class="font-semibold text-zinc-950 underline dark:text-zinc-100"
-                                                    >Create a token in
-                                                    Cloudflare</a
-                                                >
-                                                with Email Sending Edit, Zone
-                                                Read, and DNS Edit pre-selected
-                                                — Larasend uses these to onboard
-                                                sending domains automatically.
-                                                If a permission does not appear,
-                                                search for it in the token form.
-                                            </p>
-                                        </div>
-                                        <div
-                                            v-else
-                                            class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
-                                        >
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >AWS access key ID
-                                                    <span
-                                                        v-if="
-                                                            source?.uses_instance_role
-                                                        "
-                                                        class="font-normal"
-                                                        >(optional
-                                                        override)</span
-                                                    ></span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.aws_access_key_id
-                                                    "
-                                                    autocomplete="off"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Leave blank to keep saved value"
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >AWS secret access key
-                                                    <span
-                                                        v-if="
-                                                            source?.uses_instance_role
-                                                        "
-                                                        class="font-normal"
-                                                        >(optional
-                                                        override)</span
-                                                    ></span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.aws_secret_access_key
-                                                    "
-                                                    type="password"
-                                                    autocomplete="new-password"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Leave blank to keep saved value"
-                                                />
-                                            </label>
-                                            <label class="grid gap-2 text-sm">
-                                                <span class="text-zinc-500"
-                                                    >AWS session token</span
-                                                >
-                                                <input
-                                                    v-model="
-                                                        sourceForm.aws_session_token
-                                                    "
-                                                    autocomplete="off"
-                                                    class="rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-[#101111]"
-                                                    placeholder="Optional STS token"
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-                                    <div
-                                        v-if="sourceForm.provider === 'ses'"
-                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">
-                                            SES events
-                                        </div>
-                                        <div
-                                            class="font-mono text-xs text-zinc-500"
-                                        >
-                                            {{
-                                                setup.webhook_url ||
-                                                'Save a source first'
-                                            }}
-                                        </div>
-                                    </div>
-                                    <div
-                                        v-else
-                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">Events</div>
-                                        <div class="text-zinc-500">
-                                            Cloudflare has no event webhooks.
-                                            Delivery state is recorded at send
-                                            time and suppressions sync hourly.
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="grid gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
-                                    >
-                                        <div class="font-semibold">Quota</div>
-                                        <div class="text-zinc-500">
-                                            {{ quotaDetail }} ·
-                                            {{ quotaStatus }}
-                                        </div>
-                                    </div>
-                                    <button
-                                        class="w-fit rounded-lg bg-teal-400 px-4 py-2 text-sm font-bold text-zinc-950"
-                                    >
-                                        Save source
-                                    </button>
-                                </form>
-                            </section>
                         </section>
                     </div>
 

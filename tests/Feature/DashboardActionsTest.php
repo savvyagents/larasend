@@ -115,7 +115,7 @@ it('configures a ses source and creates domain dns records', function () {
             'default_from_email' => 'receipts@example.com',
             'retention_days' => 180,
         ])
-        ->assertRedirect('/identities');
+        ->assertRedirect('/source');
 
     fakeSesIdentityCreation($user);
 
@@ -424,7 +424,7 @@ it('syncs ses source quota from aws', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota")
-        ->assertRedirect("/projects/{$project->slug}/setup");
+        ->assertRedirect("/projects/{$project->slug}/source");
 
     $source->refresh();
 
@@ -454,7 +454,7 @@ it('can sync ses quota silently for setup automation', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/source/quota", ['silent' => true])
-        ->assertRedirect("/projects/{$project->slug}/setup")
+        ->assertRedirect("/projects/{$project->slug}/source")
         ->assertSessionMissing('toast');
 
     expect($source->fresh()->last_quota['max_24_hour_send'])->toBe(1000);

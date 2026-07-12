@@ -195,14 +195,14 @@ class ActivityController extends Controller
                     'label' => 'Configure Cloudflare source',
                     'description' => 'Save the default sender, your Cloudflare account ID, and an API token with Email Sending Edit, Zone Read, and DNS Edit permissions.',
                     'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
-                    'href' => $context->sectionPath($project, 'identities'),
+                    'href' => $context->sectionPath($project, 'source'),
                 ]
                 : [
                     'key' => 'source',
                     'label' => 'Configure SES source',
                     'description' => 'Save the AWS region, default sender, and either IAM access keys or an attached production instance role.',
                     'complete' => (bool) ($source?->default_from_email && $hasSendingCredentials),
-                    'href' => $context->sectionPath($project, 'identities'),
+                    'href' => $context->sectionPath($project, 'source'),
                 ],
             $isCloudflare
                 ? [

@@ -164,9 +164,9 @@ const navigationGroups = computed(() => [
         label: 'Settings',
         items: [
             {
-                label: 'Sending source',
-                section: 'setup',
-                href: `${props.projectPath}/setup`,
+                label: 'Email provider',
+                section: 'source',
+                href: `${props.projectPath}/source`,
                 icon: Settings2,
                 count: null,
             },
