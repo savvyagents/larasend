@@ -270,7 +270,7 @@ const mobileItems = computed(() => [
             <section
                 v-for="group in navigationGroups"
                 :key="group.label"
-                class="mb-2.5 last:mb-0"
+                class="mb-2.5 pt-1.5 first:pt-0 last:mb-0"
             >
                 <h2
                     class="mb-0.5 px-2 font-mono text-[9.5px] font-semibold tracking-[0.14em] text-zinc-400 uppercase dark:text-[#6c7177]"
