@@ -6,6 +6,8 @@ import {
     ArchiveRestore,
     ArrowLeft,
     AtSign,
+    Bell,
+    CheckSquare,
     Forward,
     Inbox as InboxIcon,
     Mail,
@@ -18,6 +20,8 @@ import {
     Send,
     SlidersHorizontal,
     StickyNote,
+    Tag,
+    History,
     X,
 } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -107,6 +111,13 @@ const props = defineProps<{
               messages: Message[];
               reply_from: string | null;
               active_viewers: { id: number; name: string }[];
+              activity: {
+                  id: number;
+                  type: string;
+                  actor: string;
+                  metadata: Record<string, unknown>;
+                  at_human: string | null;
+              }[];
           })
         | null;
 }>();
@@ -115,6 +126,11 @@ const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const mobileThreadOpen = ref(false);
 const showFilters = ref(false);
+const bulkMode = ref(false);
+const selectedThreadIds = ref<string[]>([]);
+const showActivity = ref(false);
+const tagInput = ref('');
+const notificationsEnabled = ref(false);
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 
 const inboxPath = computed(() => `${props.project.path}/inbox`);
@@ -219,7 +235,9 @@ function threadAction(action: string): void {
     );
 }
 
-function updateWorkflow(data: Record<string, string | number | null>): void {
+function updateWorkflow(
+    data: Record<string, string | number | string[] | null>,
+): void {
     if (!props.selectedThread) {
         return;
     }
@@ -228,6 +246,79 @@ function updateWorkflow(data: Record<string, string | number | null>): void {
         `${props.project.path}/threads/${props.selectedThread.public_id}/workflow`,
         data,
         { preserveScroll: true, showProgress: false },
+    );
+}
+
+function toggleThreadSelection(publicId: string): void {
+    selectedThreadIds.value = selectedThreadIds.value.includes(publicId)
+        ? selectedThreadIds.value.filter((id) => id !== publicId)
+        : [...selectedThreadIds.value, publicId];
+}
+
+function bulkAction(
+    action: string,
+    assignedToUserId: number | null = null,
+): void {
+    if (!selectedThreadIds.value.length) {
+        return;
+    }
+
+    router.post(
+        `${props.project.path}/inbox/bulk`,
+        {
+            thread_ids: selectedThreadIds.value,
+            action,
+            assigned_to_user_id: assignedToUserId,
+        },
+        {
+            preserveScroll: true,
+            onSuccess: () => {
+                selectedThreadIds.value = [];
+                bulkMode.value = false;
+            },
+        },
+    );
+}
+
+function addTag(): void {
+    const tag = tagInput.value.trim().toLowerCase();
+
+    if (
+        !props.selectedThread ||
+        !tag ||
+        props.selectedThread.tags.includes(tag)
+    ) {
+        return;
+    }
+
+    updateWorkflow({ tags: [...props.selectedThread.tags, tag] });
+    tagInput.value = '';
+}
+
+function removeTag(tag: string): void {
+    if (!props.selectedThread) {
+        return;
+    }
+
+    updateWorkflow({
+        tags: props.selectedThread.tags.filter((item) => item !== tag),
+    });
+}
+
+async function toggleNotifications(): Promise<void> {
+    if (!('Notification' in window)) {
+        return;
+    }
+
+    const permission =
+        Notification.permission === 'granted'
+            ? 'granted'
+            : await Notification.requestPermission();
+    notificationsEnabled.value =
+        permission === 'granted' ? !notificationsEnabled.value : false;
+    localStorage.setItem(
+        'larasend:inbox-notifications',
+        notificationsEnabled.value ? '1' : '0',
     );
 }
 
@@ -341,6 +432,8 @@ onMounted(() => {
         'thread',
     );
     window.addEventListener('keydown', onKeydown);
+    notificationsEnabled.value =
+        localStorage.getItem('larasend:inbox-notifications') === '1';
 });
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
@@ -350,7 +443,32 @@ usePoll(
     { autoStart: true },
 );
 
-const replyForm = useForm({ text: '', html: '', attachments: [] as File[] });
+let previousUnreadCount = props.counts.unread;
+watch(
+    () => props.counts.unread,
+    (count) => {
+        if (
+            notificationsEnabled.value &&
+            count > previousUnreadCount &&
+            Notification.permission === 'granted'
+        ) {
+            new Notification('New Larasend conversation', {
+                body: `${count} unread conversations in ${props.project.name}`,
+            });
+        }
+
+        previousUnreadCount = count;
+    },
+);
+
+const replyForm = useForm({
+    text: '',
+    html: '',
+    reply_all: false,
+    cc: '',
+    bcc: '',
+    attachments: [] as File[],
+});
 const replyEditor = ref<InstanceType<typeof RichTextEditor> | null>(null);
 
 function sendReply(): void {
@@ -702,6 +820,19 @@ function participantSummary(thread: ThreadRow): string {
             </button>
             <button
                 type="button"
+                class="grid size-8 place-items-center rounded-md border border-zinc-200 text-zinc-500 dark:border-[#1d2125]"
+                :class="notificationsEnabled ? 'text-teal-500' : ''"
+                :title="
+                    notificationsEnabled
+                        ? 'Disable new-mail notifications'
+                        : 'Enable new-mail notifications'
+                "
+                @click="toggleNotifications"
+            >
+                <Bell class="size-3.5" />
+            </button>
+            <button
+                type="button"
                 title="Keyboard shortcuts (?)"
                 class="grid size-8 place-items-center rounded-md border border-zinc-200 font-mono text-xs font-semibold text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-950 dark:border-[#1d2125] dark:text-zinc-400 dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
                 :class="canSend ? '' : 'ml-auto'"
@@ -806,19 +937,94 @@ function participantSummary(thread: ThreadRow): string {
                 "
             >
                 <div
-                    class="border-b border-zinc-200 p-2.5 dark:border-[#1d2125]"
+                    class="grid gap-2 border-b border-zinc-200 p-2.5 dark:border-[#1d2125]"
                 >
-                    <div class="relative">
-                        <Search
-                            class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-zinc-400"
-                        />
-                        <input
-                            ref="searchInput"
-                            v-model="searchQuery"
-                            placeholder="Search conversations"
-                            class="h-8 w-full rounded-md border border-zinc-200 bg-white pl-8 text-[12.5px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
-                            @input="onSearchInput"
-                        />
+                    <div class="flex gap-2">
+                        <div class="relative min-w-0 flex-1">
+                            <Search
+                                class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-zinc-400"
+                            />
+                            <input
+                                ref="searchInput"
+                                v-model="searchQuery"
+                                placeholder="Search conversations"
+                                class="h-8 w-full rounded-md border border-zinc-200 bg-white pl-8 text-[12.5px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
+                                @input="onSearchInput"
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            class="grid size-8 place-items-center rounded-md border border-zinc-200 text-zinc-500 dark:border-[#1d2125]"
+                            :class="
+                                bulkMode
+                                    ? 'bg-teal-50 text-teal-700 dark:bg-teal-400/10 dark:text-teal-300'
+                                    : ''
+                            "
+                            title="Select conversations"
+                            @click="
+                                bulkMode = !bulkMode;
+                                selectedThreadIds = [];
+                            "
+                        >
+                            <CheckSquare class="size-3.5" />
+                        </button>
+                    </div>
+                    <div
+                        v-if="bulkMode"
+                        class="flex flex-wrap items-center gap-1.5 text-xs"
+                    >
+                        <span class="mr-auto font-semibold"
+                            >{{ selectedThreadIds.length }} selected</span
+                        >
+                        <button
+                            type="button"
+                            class="rounded border border-zinc-200 px-2 py-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @click="bulkAction('mark_read')"
+                        >
+                            Read
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded border border-zinc-200 px-2 py-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @click="bulkAction('archive')"
+                        >
+                            Archive
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded border border-zinc-200 px-2 py-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @click="bulkAction('close')"
+                        >
+                            Close
+                        </button>
+                        <select
+                            class="h-7 rounded border border-zinc-200 bg-transparent px-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @change="
+                                bulkAction(
+                                    'assign',
+                                    ($event.target as HTMLSelectElement).value
+                                        ? Number(
+                                              (
+                                                  $event.target as HTMLSelectElement
+                                              ).value,
+                                          )
+                                        : null,
+                                )
+                            "
+                        >
+                            <option value="">Assign…</option>
+                            <option
+                                v-for="member in teamMembers"
+                                :key="member.id"
+                                :value="member.id"
+                            >
+                                {{ member.name }}
+                            </option>
+                        </select>
                     </div>
                 </div>
                 <div class="min-h-0 overflow-auto">
@@ -841,9 +1047,28 @@ function participantSummary(thread: ThreadRow): string {
                                 ? 'bg-teal-50/70 dark:bg-teal-400/10'
                                 : ''
                         "
-                        @click="openThread(thread.public_id)"
+                        @click="
+                            bulkMode
+                                ? toggleThreadSelection(thread.public_id)
+                                : openThread(thread.public_id)
+                        "
                     >
                         <div class="flex items-baseline gap-2">
+                            <span
+                                v-if="bulkMode"
+                                class="grid size-4 shrink-0 place-items-center rounded border border-zinc-300 text-[10px]"
+                                :class="
+                                    selectedThreadIds.includes(thread.public_id)
+                                        ? 'border-teal-400 bg-teal-400 text-zinc-950'
+                                        : ''
+                                "
+                            >
+                                {{
+                                    selectedThreadIds.includes(thread.public_id)
+                                        ? '✓'
+                                        : ''
+                                }}
+                            </span>
                             <span
                                 v-if="thread.unread"
                                 class="size-1.5 shrink-0 self-center rounded-full bg-teal-400"
@@ -955,6 +1180,21 @@ function participantSummary(thread: ThreadRow): string {
                         <p class="truncate font-mono text-[11px] text-zinc-500">
                             {{ selectedThread.participants.join(' · ') }}
                         </p>
+                        <div
+                            v-if="selectedThread.tags.length"
+                            class="mt-1 flex flex-wrap gap-1"
+                        >
+                            <button
+                                v-for="tag in selectedThread.tags"
+                                :key="tag"
+                                type="button"
+                                class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                                :title="`Remove ${tag}`"
+                                @click="removeTag(tag)"
+                            >
+                                #{{ tag }} ×
+                            </button>
+                        </div>
                         <p
                             v-if="selectedThread.active_viewers.length"
                             class="mt-1 truncate text-[10.5px] font-semibold text-amber-500"
@@ -982,6 +1222,26 @@ function participantSummary(thread: ThreadRow): string {
                         <option value="pending">Pending</option>
                         <option value="closed">Closed</option>
                     </select>
+                    <form
+                        class="hidden items-center gap-1 2xl:flex"
+                        @submit.prevent="addTag"
+                    >
+                        <Tag class="size-3.5 text-zinc-400" />
+                        <input
+                            v-model="tagInput"
+                            maxlength="32"
+                            placeholder="tag"
+                            class="h-8 w-20 rounded-md border border-zinc-200 bg-transparent px-2 text-xs dark:border-[#1d2125]"
+                        />
+                    </form>
+                    <button
+                        type="button"
+                        class="grid size-8 place-items-center rounded-md border border-zinc-200 text-zinc-500 dark:border-[#1d2125]"
+                        title="Activity history"
+                        @click="showActivity = true"
+                    >
+                        <History class="size-3.5" />
+                    </button>
                     <select
                         :value="selectedThread.assigned_to?.id ?? ''"
                         class="hidden h-8 max-w-36 rounded-md border border-zinc-200 bg-transparent px-2 text-xs lg:block dark:border-[#1d2125]"
@@ -1363,6 +1623,29 @@ function participantSummary(thread: ThreadRow): string {
                                 @update:text="replyForm.text = $event"
                                 @submit="sendReply"
                             />
+                            <div class="grid gap-2 sm:grid-cols-3">
+                                <label
+                                    class="flex items-center gap-2 text-xs text-zinc-500"
+                                >
+                                    <input
+                                        v-model="replyForm.reply_all"
+                                        type="checkbox"
+                                    />
+                                    Reply all
+                                </label>
+                                <input
+                                    v-model="replyForm.cc"
+                                    type="text"
+                                    placeholder="CC"
+                                    class="h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs dark:border-[#1d2125]"
+                                />
+                                <input
+                                    v-model="replyForm.bcc"
+                                    type="text"
+                                    placeholder="BCC"
+                                    class="h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs dark:border-[#1d2125]"
+                                />
+                            </div>
                             <div
                                 v-if="replyForm.attachments.length"
                                 class="flex flex-wrap gap-2"
@@ -1607,9 +1890,9 @@ function participantSummary(thread: ThreadRow): string {
                     <span class="text-zinc-500">To</span>
                     <input
                         v-model="composeForm.to"
-                        type="email"
+                        type="text"
                         required
-                        placeholder="person@example.com"
+                        placeholder="One or more comma-separated addresses"
                         class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
                     />
                     <span
@@ -1796,6 +2079,95 @@ function participantSummary(thread: ThreadRow): string {
                 </div>
             </form>
         </div>
+    </div>
+    <div
+        v-if="showActivity && selectedThread"
+        class="fixed inset-0 z-50 grid place-items-center bg-zinc-950/45 p-4 backdrop-blur-sm"
+        @click.self="showActivity = false"
+    >
+        <section
+            class="grid max-h-[80vh] w-full max-w-lg grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-[#1d2125] dark:bg-[#111315]"
+        >
+            <div
+                class="flex items-center border-b border-zinc-200 p-4 dark:border-[#1d2125]"
+            >
+                <div>
+                    <h2 class="font-semibold">Conversation activity</h2>
+                    <p class="text-xs text-zinc-500">
+                        Assignment, status, snooze, and archive history
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    class="ml-auto p-2"
+                    aria-label="Close activity"
+                    @click="showActivity = false"
+                >
+                    <X class="size-4" />
+                </button>
+            </div>
+            <div class="overflow-y-auto p-4">
+                <form class="mb-4 flex gap-2" @submit.prevent="addTag">
+                    <div class="relative min-w-0 flex-1">
+                        <Tag
+                            class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-zinc-400"
+                        />
+                        <input
+                            v-model="tagInput"
+                            maxlength="32"
+                            placeholder="Add a conversation tag"
+                            class="h-9 w-full rounded-md border border-zinc-200 bg-transparent pr-3 pl-8 text-sm dark:border-[#1d2125]"
+                        />
+                    </div>
+                    <button
+                        type="submit"
+                        class="rounded-md bg-teal-300 px-3 text-xs font-bold text-zinc-950 disabled:opacity-50"
+                        :disabled="!tagInput.trim()"
+                    >
+                        Add tag
+                    </button>
+                </form>
+                <div
+                    v-if="selectedThread.tags.length"
+                    class="mb-4 flex flex-wrap gap-1.5"
+                >
+                    <button
+                        v-for="tag in selectedThread.tags"
+                        :key="tag"
+                        type="button"
+                        class="rounded bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800"
+                        @click="removeTag(tag)"
+                    >
+                        #{{ tag }} ×
+                    </button>
+                </div>
+                <p
+                    v-if="!selectedThread.activity.length"
+                    class="py-8 text-center text-sm text-zinc-500"
+                >
+                    No workflow activity yet.
+                </p>
+                <div
+                    v-for="event in selectedThread.activity"
+                    :key="event.id"
+                    class="flex gap-3 border-b border-zinc-100 py-3 last:border-0 dark:border-[#1d2125]"
+                >
+                    <span
+                        class="grid size-7 shrink-0 place-items-center rounded-full bg-zinc-100 font-mono text-[10px] dark:bg-zinc-800"
+                        >{{ event.actor.slice(0, 2).toUpperCase() }}</span
+                    >
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm">
+                            <strong>{{ event.actor }}</strong>
+                            {{ event.type.replaceAll('_', ' ') }}
+                        </p>
+                        <p class="font-mono text-[10.5px] text-zinc-500">
+                            {{ event.at_human }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
     <div
         v-if="showShortcuts"

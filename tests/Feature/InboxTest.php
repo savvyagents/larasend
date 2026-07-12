@@ -141,6 +141,28 @@ it('keeps read state personal while sharing assignment and workflow state', func
         ->and($thread->events()->where('type', 'workflow_updated')->exists())->toBeTrue();
 });
 
+it('bulk triages only project-scoped conversations and records activity', function () {
+    [$user, $project, $source] = inboxFixture();
+    Queue::fake();
+    receiveThreadedEmail($this, $source, 'Bulk one', 'bulk-1@customer.test');
+    receiveThreadedEmail($this, $source, 'Bulk two', 'bulk-2@customer.test');
+    $threads = Thread::query()->orderBy('id')->get();
+
+    $this->actingAs($user)
+        ->post("/projects/{$project->slug}/inbox/bulk", [
+            'thread_ids' => $threads->pluck('public_id')->all(),
+            'action' => 'close',
+        ])
+        ->assertRedirect();
+
+    expect(Thread::query()->where('status', 'closed')->count())->toBe(2)
+        ->and($threads->first()->events()->where('type', 'bulk_close')->exists())->toBeTrue();
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?mailbox=closed")
+        ->assertInertia(fn ($page) => $page->has('threads', 2));
+});
+
 it('filters mailboxes and blocks cross-project thread access', function () {
     [$user, $project, $source] = inboxFixture();
 

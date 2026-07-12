@@ -72,6 +72,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('threads/{thread:public_id}/notes', [ThreadActionController::class, 'storeNote'])->name('threads.notes.store');
         Route::patch('threads/{thread:public_id}/workflow', [ThreadActionController::class, 'updateWorkflow'])->name('threads.workflow.update');
         Route::post('inbox/compose', [ThreadActionController::class, 'compose'])->name('inbox.compose');
+        Route::post('inbox/bulk', [ThreadActionController::class, 'bulk'])->name('inbox.bulk');
         Route::get('inbound/{inboundEmail:public_id}/attachments/{index}', InboundAttachmentController::class)
             ->whereNumber('index')
             ->name('inbound.attachments');

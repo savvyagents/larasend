@@ -84,6 +84,13 @@ class InboxController extends Controller
                 'messages' => $this->messagesFor($selected),
                 'reply_from' => $this->replyFromFor($selected, $source?->default_from_email),
                 'active_viewers' => $selected->userStates()->with('user:id,name')->where('user_id', '!=', $user->id)->where('last_viewed_at', '>=', now()->subMinutes(2))->get()->map(fn ($state): array => ['id' => $state->user_id, 'name' => $state->user?->name ?? 'Teammate'])->values(),
+                'activity' => $selected->events()->with('user:id,name')->latest()->limit(20)->get()->map(fn ($event): array => [
+                    'id' => $event->id,
+                    'type' => $event->type,
+                    'actor' => $event->user?->name ?? 'System',
+                    'metadata' => $event->metadata ?? [],
+                    'at_human' => $event->created_at?->diffForHumans(short: true),
+                ]),
             ] : null,
         ]);
     }
