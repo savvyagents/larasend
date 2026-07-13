@@ -206,34 +206,21 @@ function openMailbox(key: string): void {
 }
 
 function filterAddress(address: string): void {
-    const isSelected = props.address === address;
-
-    visitInbox({
-        mailbox: isSelected ? 'inbox' : 'all',
-        address: isSelected ? null : address,
-        thread: null,
-    });
+    setAddressFilter(props.address === address ? null : address);
 }
 
 function filterAssignment(assigned: string): void {
-    visitInbox({
-        assigned: props.filters.assigned === assigned ? null : assigned,
-        thread: null,
-    });
+    setAssignmentFilter(props.filters.assigned === assigned ? null : assigned);
 }
 
-function setAssignmentFilter(event: Event): void {
-    const assigned = (event.target as HTMLSelectElement).value;
-
-    visitInbox({ assigned: assigned || null, thread: null });
+function setAssignmentFilter(assigned: string | null): void {
+    visitInbox({ assigned, thread: null });
 }
 
-function setAddressFilter(event: Event): void {
-    const address = (event.target as HTMLSelectElement).value;
-
+function setAddressFilter(address: string | null): void {
     visitInbox({
         mailbox: address ? 'all' : 'inbox',
-        address: address || null,
+        address,
         thread: null,
     });
 }
@@ -963,50 +950,119 @@ function participantSummary(thread: ThreadRow): string {
                         </button>
                     </div>
 
-                    <div
-                        class="grid gap-2.5 rounded-lg border border-zinc-200 bg-zinc-50/70 p-2.5 dark:border-[#1d2125] dark:bg-[#101111]"
-                    >
-                        <label class="grid min-w-0 gap-1">
-                            <span
-                                class="text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
+                    <div class="grid gap-3">
+                        <fieldset class="grid min-w-0 gap-1.5">
+                            <legend
+                                class="mb-1 text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
                             >
                                 Assignee
-                            </span>
-                            <select
-                                :value="filters.assigned"
-                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
-                                @change="setAssignmentFilter"
+                            </legend>
+                            <div
+                                class="grid grid-cols-[0.65fr_0.8fr_1.25fr] gap-0.5 rounded-lg bg-zinc-100 p-0.5 ring-1 ring-zinc-200 dark:bg-[#111315] dark:ring-[#25292d]"
+                                role="radiogroup"
+                                aria-label="Assignee filter"
                             >
-                                <option value="">Any assignee</option>
-                                <option value="mine">Assigned to me</option>
-                                <option value="unassigned">Unassigned</option>
-                            </select>
-                        </label>
+                                <button
+                                    v-for="entry in [
+                                        { key: null, label: 'All' },
+                                        { key: 'mine', label: 'Mine' },
+                                        {
+                                            key: 'unassigned',
+                                            label: 'Unassigned',
+                                        },
+                                    ]"
+                                    :key="entry.label"
+                                    type="button"
+                                    role="radio"
+                                    class="h-7 min-w-0 rounded-md px-1 text-[10.5px] font-semibold transition"
+                                    :class="
+                                        (filters.assigned || null) === entry.key
+                                            ? 'bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200 dark:bg-[#22262a] dark:text-zinc-100 dark:ring-[#30353a]'
+                                            : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-500 dark:hover:text-zinc-200'
+                                    "
+                                    :aria-checked="
+                                        (filters.assigned || null) === entry.key
+                                    "
+                                    @click="setAssignmentFilter(entry.key)"
+                                >
+                                    {{ entry.label }}
+                                </button>
+                            </div>
+                        </fieldset>
 
-                        <label
+                        <fieldset
                             v-if="addresses.length"
-                            class="grid min-w-0 gap-1"
+                            class="grid min-w-0 gap-1.5"
                         >
-                            <span
-                                class="text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
+                            <legend
+                                class="mb-1 text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
                             >
                                 Receiving address
-                            </span>
-                            <select
-                                :value="address ?? ''"
-                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 font-mono text-[10.5px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
-                                @change="setAddressFilter"
+                            </legend>
+                            <div
+                                class="grid divide-y divide-zinc-200 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:divide-[#25292d] dark:border-[#25292d] dark:bg-[#101111]"
+                                role="radiogroup"
+                                aria-label="Receiving address filter"
                             >
-                                <option value="">All addresses</option>
-                                <option
+                                <button
+                                    type="button"
+                                    role="radio"
+                                    class="flex h-9 min-w-0 items-center gap-2 px-2 text-left transition"
+                                    :class="
+                                        address === null
+                                            ? 'bg-teal-50 text-zinc-900 dark:bg-teal-400/10 dark:text-zinc-100'
+                                            : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-[#16191c]'
+                                    "
+                                    :aria-checked="address === null"
+                                    @click="setAddressFilter(null)"
+                                >
+                                    <span
+                                        class="size-1.5 shrink-0 rounded-full"
+                                        :class="
+                                            address === null
+                                                ? 'bg-teal-500'
+                                                : 'bg-zinc-300 dark:bg-zinc-700'
+                                        "
+                                    />
+                                    <span
+                                        class="min-w-0 flex-1 truncate text-[11.5px] font-medium"
+                                    >
+                                        All addresses
+                                    </span>
+                                </button>
+                                <button
                                     v-for="entry in addresses"
                                     :key="entry.address"
-                                    :value="entry.address"
+                                    type="button"
+                                    role="radio"
+                                    class="flex h-10 min-w-0 items-center gap-2 px-2 text-left transition"
+                                    :class="
+                                        address === entry.address
+                                            ? 'bg-teal-50 text-zinc-900 dark:bg-teal-400/10 dark:text-zinc-100'
+                                            : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-[#16191c]'
+                                    "
+                                    :aria-checked="address === entry.address"
+                                    @click="setAddressFilter(entry.address)"
                                 >
-                                    {{ entry.address }} · {{ entry.count }}
-                                </option>
-                            </select>
-                        </label>
+                                    <span
+                                        class="grid size-5 shrink-0 place-items-center rounded-md bg-zinc-100 dark:bg-[#1b1e21]"
+                                    >
+                                        <AtSign class="size-3" />
+                                    </span>
+                                    <span
+                                        class="min-w-0 flex-1 truncate font-mono text-[10.5px]"
+                                        :title="entry.address"
+                                    >
+                                        {{ entry.address }}
+                                    </span>
+                                    <span
+                                        class="grid min-w-4 shrink-0 place-items-center rounded-full bg-zinc-100 px-1 font-mono text-[9.5px] text-zinc-500 dark:bg-[#1b1e21] dark:text-zinc-400"
+                                    >
+                                        {{ entry.count }}
+                                    </span>
+                                </button>
+                            </div>
+                        </fieldset>
                     </div>
                 </section>
             </aside>
