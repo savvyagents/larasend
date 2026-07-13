@@ -881,84 +881,106 @@ function participantSummary(thread: ThreadRow): string {
             <aside
                 class="hidden min-h-0 content-start gap-1 overflow-auto border-r border-zinc-200 p-3 xl:grid dark:border-[#1d2125]"
             >
-                <p
-                    class="px-2 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                >
-                    Mailboxes
-                </p>
-                <button
-                    v-for="box in mailboxes"
-                    :key="box.key"
-                    type="button"
-                    class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left font-medium transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
-                    :class="
-                        mailbox === box.key && !address
-                            ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
-                            : 'text-zinc-600 dark:text-zinc-400'
-                    "
-                    @click="openMailbox(box.key)"
-                >
-                    <component :is="box.icon" class="size-3.5 shrink-0" />
-                    <span class="flex-1">{{ box.label }}</span>
-                    <span
-                        v-if="box.count"
-                        class="rounded-full bg-teal-300 px-1.5 font-mono text-[10.5px] font-semibold text-zinc-950"
+                <section class="grid gap-0.5">
+                    <p
+                        class="px-2 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
                     >
-                        {{ box.count }}
-                    </span>
-                </button>
-
-                <p
-                    class="px-2 pt-4 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                >
-                    Assignment
-                </p>
-                <button
-                    v-for="entry in [
-                        { key: 'mine', label: 'Mine' },
-                        { key: 'unassigned', label: 'Unassigned' },
-                    ]"
-                    :key="entry.key"
-                    type="button"
-                    class="rounded-md px-2 py-1.5 text-left"
-                    :class="
-                        filters.assigned === entry.key
-                            ? 'bg-teal-50 dark:bg-teal-400/10'
-                            : 'text-zinc-600 dark:text-zinc-400'
-                    "
-                    @click="filterAssignment(entry.key)"
-                >
-                    {{ entry.label }}
-                </button>
-
-                <p
-                    v-if="addresses.length"
-                    class="px-2 pt-4 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                >
-                    Addresses
-                </p>
-                <button
-                    v-for="entry in addresses"
-                    :key="entry.address"
-                    type="button"
-                    class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
-                    :class="
-                        address === entry.address
-                            ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
-                            : 'text-zinc-600 dark:text-zinc-400'
-                    "
-                    @click="filterAddress(entry.address)"
-                >
-                    <AtSign class="size-3 shrink-0" />
-                    <span
-                        class="min-w-0 flex-1 truncate font-mono text-[11.5px]"
+                        Mailboxes
+                    </p>
+                    <button
+                        v-for="box in mailboxes"
+                        :key="box.key"
+                        type="button"
+                        class="flex h-7 items-center gap-2.5 rounded-md px-2 text-left font-medium transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
+                        :class="
+                            mailbox === box.key && !address
+                                ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
+                                : 'text-zinc-600 dark:text-zinc-400'
+                        "
+                        @click="openMailbox(box.key)"
                     >
-                        {{ entry.address }}
-                    </span>
-                    <span class="font-mono text-[10.5px] text-zinc-500">
-                        {{ entry.count }}
-                    </span>
-                </button>
+                        <component :is="box.icon" class="size-3.5 shrink-0" />
+                        <span class="flex-1">{{ box.label }}</span>
+                        <span
+                            v-if="box.count"
+                            class="rounded-full bg-teal-300 px-1.5 font-mono text-[10.5px] font-semibold text-zinc-950"
+                        >
+                            {{ box.count }}
+                        </span>
+                    </button>
+                </section>
+
+                <section
+                    class="mt-4 border-t border-zinc-200 pt-4 dark:border-[#1d2125]"
+                >
+                    <p
+                        class="flex items-center gap-1.5 px-2 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                    >
+                        <SlidersHorizontal class="size-3" />
+                        Filters
+                    </p>
+
+                    <div class="grid gap-3 pt-3">
+                        <div class="grid gap-0.5">
+                            <p
+                                class="px-2 pb-0.5 font-mono text-[9.5px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            >
+                                Assignment
+                            </p>
+                            <button
+                                v-for="entry in [
+                                    { key: 'mine', label: 'Mine' },
+                                    { key: 'unassigned', label: 'Unassigned' },
+                                ]"
+                                :key="entry.key"
+                                type="button"
+                                class="h-7 rounded-md px-2 text-left text-[12.5px] font-medium transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
+                                :class="
+                                    filters.assigned === entry.key
+                                        ? 'bg-teal-50 text-zinc-950 ring-1 ring-teal-200 dark:bg-teal-400/10 dark:text-zinc-100 dark:ring-teal-400/20'
+                                        : 'text-zinc-600 dark:text-zinc-400'
+                                "
+                                :aria-pressed="filters.assigned === entry.key"
+                                @click="filterAssignment(entry.key)"
+                            >
+                                {{ entry.label }}
+                            </button>
+                        </div>
+
+                        <div v-if="addresses.length" class="grid gap-0.5">
+                            <p
+                                class="px-2 pb-0.5 font-mono text-[9.5px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            >
+                                Receiving address
+                            </p>
+                            <button
+                                v-for="entry in addresses"
+                                :key="entry.address"
+                                type="button"
+                                class="flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-left transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
+                                :class="
+                                    address === entry.address
+                                        ? 'bg-teal-50 text-zinc-950 ring-1 ring-teal-200 dark:bg-teal-400/10 dark:text-zinc-100 dark:ring-teal-400/20'
+                                        : 'text-zinc-600 dark:text-zinc-400'
+                                "
+                                :aria-pressed="address === entry.address"
+                                @click="filterAddress(entry.address)"
+                            >
+                                <AtSign class="size-3 shrink-0" />
+                                <span
+                                    class="min-w-0 flex-1 truncate font-mono text-[11.5px]"
+                                >
+                                    {{ entry.address }}
+                                </span>
+                                <span
+                                    class="font-mono text-[10.5px] text-zinc-500"
+                                >
+                                    {{ entry.count }}
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </section>
             </aside>
 
             <section
