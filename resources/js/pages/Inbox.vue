@@ -169,6 +169,10 @@ const pageTitle = computed(() =>
         : `Inbox · ${props.project.name}`,
 );
 
+const hasFilters = computed(() =>
+    Boolean(props.filters.assigned || props.address),
+);
+
 function visitInbox(params: Record<string, string | null>): void {
     if (params.thread === null) {
         mobileThreadOpen.value = false;
@@ -214,6 +218,31 @@ function filterAddress(address: string): void {
 function filterAssignment(assigned: string): void {
     visitInbox({
         assigned: props.filters.assigned === assigned ? null : assigned,
+        thread: null,
+    });
+}
+
+function setAssignmentFilter(event: Event): void {
+    const assigned = (event.target as HTMLSelectElement).value;
+
+    visitInbox({ assigned: assigned || null, thread: null });
+}
+
+function setAddressFilter(event: Event): void {
+    const address = (event.target as HTMLSelectElement).value;
+
+    visitInbox({
+        mailbox: address ? 'all' : 'inbox',
+        address: address || null,
+        thread: null,
+    });
+}
+
+function clearFilters(): void {
+    visitInbox({
+        mailbox: props.address ? 'inbox' : props.mailbox,
+        address: null,
+        assigned: null,
         thread: null,
     });
 }
@@ -913,72 +942,71 @@ function participantSummary(thread: ThreadRow): string {
                 <section
                     class="mt-4 border-t border-zinc-200 pt-4 dark:border-[#1d2125]"
                 >
-                    <p
-                        class="flex items-center gap-1.5 px-2 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                    <div class="mb-2.5 flex items-center gap-2 px-1">
+                        <span
+                            class="grid size-6 place-items-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-[#16191c] dark:text-zinc-400"
+                        >
+                            <SlidersHorizontal class="size-3.5" />
+                        </span>
+                        <p
+                            class="text-[12.5px] font-semibold text-zinc-800 dark:text-zinc-200"
+                        >
+                            Filters
+                        </p>
+                        <button
+                            v-if="hasFilters"
+                            type="button"
+                            class="ml-auto rounded px-1 py-0.5 text-[10.5px] font-semibold text-teal-700 transition hover:bg-teal-50 dark:text-teal-300 dark:hover:bg-teal-400/10"
+                            @click="clearFilters"
+                        >
+                            Clear
+                        </button>
+                    </div>
+
+                    <div
+                        class="grid gap-2.5 rounded-lg border border-zinc-200 bg-zinc-50/70 p-2.5 dark:border-[#1d2125] dark:bg-[#101111]"
                     >
-                        <SlidersHorizontal class="size-3" />
-                        Filters
-                    </p>
-
-                    <div class="grid gap-3 pt-3">
-                        <div class="grid gap-0.5">
-                            <p
-                                class="px-2 pb-0.5 font-mono text-[9.5px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                        <label class="grid min-w-0 gap-1">
+                            <span
+                                class="text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
                             >
-                                Assignment
-                            </p>
-                            <button
-                                v-for="entry in [
-                                    { key: 'mine', label: 'Mine' },
-                                    { key: 'unassigned', label: 'Unassigned' },
-                                ]"
-                                :key="entry.key"
-                                type="button"
-                                class="h-7 rounded-md px-2 text-left text-[12.5px] font-medium transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
-                                :class="
-                                    filters.assigned === entry.key
-                                        ? 'bg-teal-50 text-zinc-950 ring-1 ring-teal-200 dark:bg-teal-400/10 dark:text-zinc-100 dark:ring-teal-400/20'
-                                        : 'text-zinc-600 dark:text-zinc-400'
-                                "
-                                :aria-pressed="filters.assigned === entry.key"
-                                @click="filterAssignment(entry.key)"
+                                Assignee
+                            </span>
+                            <select
+                                :value="filters.assigned"
+                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#262a2e] dark:bg-[#16191c] dark:text-zinc-200"
+                                @change="setAssignmentFilter"
                             >
-                                {{ entry.label }}
-                            </button>
-                        </div>
+                                <option value="">Any assignee</option>
+                                <option value="mine">Assigned to me</option>
+                                <option value="unassigned">Unassigned</option>
+                            </select>
+                        </label>
 
-                        <div v-if="addresses.length" class="grid gap-0.5">
-                            <p
-                                class="px-2 pb-0.5 font-mono text-[9.5px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                        <label
+                            v-if="addresses.length"
+                            class="grid min-w-0 gap-1"
+                        >
+                            <span
+                                class="text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
                             >
                                 Receiving address
-                            </p>
-                            <button
-                                v-for="entry in addresses"
-                                :key="entry.address"
-                                type="button"
-                                class="flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-left transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
-                                :class="
-                                    address === entry.address
-                                        ? 'bg-teal-50 text-zinc-950 ring-1 ring-teal-200 dark:bg-teal-400/10 dark:text-zinc-100 dark:ring-teal-400/20'
-                                        : 'text-zinc-600 dark:text-zinc-400'
-                                "
-                                :aria-pressed="address === entry.address"
-                                @click="filterAddress(entry.address)"
+                            </span>
+                            <select
+                                :value="address ?? ''"
+                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 font-mono text-[10.5px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#262a2e] dark:bg-[#16191c] dark:text-zinc-200"
+                                @change="setAddressFilter"
                             >
-                                <AtSign class="size-3 shrink-0" />
-                                <span
-                                    class="min-w-0 flex-1 truncate font-mono text-[11.5px]"
+                                <option value="">All addresses</option>
+                                <option
+                                    v-for="entry in addresses"
+                                    :key="entry.address"
+                                    :value="entry.address"
                                 >
-                                    {{ entry.address }}
-                                </span>
-                                <span
-                                    class="font-mono text-[10.5px] text-zinc-500"
-                                >
-                                    {{ entry.count }}
-                                </span>
-                            </button>
-                        </div>
+                                    {{ entry.address }} · {{ entry.count }}
+                                </option>
+                            </select>
+                        </label>
                     </div>
                 </section>
             </aside>
