@@ -202,6 +202,57 @@ const props = defineProps<{
     section: string;
     filters: { q: string; range: string };
     metrics: Metric[];
+    dashboard: {
+        outbound: {
+            total: number;
+            failed: number;
+            queued: number;
+            bounced: number;
+            complained: number;
+        };
+        inbox: {
+            open: number;
+            unread: number;
+            mine: number;
+            unassigned: number;
+            urgent: number;
+            pending: number;
+            snoozed: number;
+        };
+        configuration: {
+            provider: string;
+            source_ready: boolean;
+            domains: number;
+            verified_domains: number;
+            inbound_domains: number;
+            quota: {
+                sent: number;
+                limit: number | null;
+                sentLast24Hours: number | null;
+                checkedAt: string | null;
+            };
+        };
+        developer: {
+            active_webhooks: number;
+            failing_webhooks: number;
+            api_keys: number;
+            expiring_api_keys: number;
+        };
+        trend: {
+            label: string;
+            sent: number;
+            delivered: number;
+            failed: number;
+        }[];
+        attention: {
+            key: string;
+            label: string;
+            description: string;
+            count: number;
+            section: string;
+            tone: string;
+        }[];
+    };
     bounceMetrics: BounceMetric[];
     bounceQueue: BounceQueueRow[];
     emails: EmailRow[];
@@ -216,6 +267,9 @@ const props = defineProps<{
         direction: string | null;
         message_count: number;
         unread: boolean;
+        status: string;
+        priority: string;
+        assigned_to: string | null;
         last_activity_at: string | null;
         last_activity_human: string | null;
     }[];
@@ -337,8 +391,16 @@ const buildLabel = computed(() => {
     const build = page.props.build as
         | { version?: string | null; sha?: string | null }
         | undefined;
-    const version = build?.version || 'dev';
+    const version = build?.version || null;
     const sha = build?.sha ? build.sha.slice(0, 7) : null;
+
+    if (!version && !sha) {
+        return '';
+    }
+
+    if (!version) {
+        return sha ?? '';
+    }
 
     return sha ? `v${version} · ${sha}` : `v${version}`;
 });
@@ -1794,8 +1856,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                         :metrics="metrics"
                         :emails="emails"
                         :recent-threads="recentThreads"
-                        :inbox-unread="inboxUnread ?? 0"
-                        :source-ready="Boolean(source?.can_send)"
+                        :dashboard="dashboard"
                         :system="system"
                     />
                 </div>

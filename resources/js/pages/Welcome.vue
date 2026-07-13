@@ -58,24 +58,34 @@ const landingStyle = computed(() => ({
 
 const featureCards = [
     {
-        title: '"Where did that email go?"',
-        body: 'Never again. Every send captures the request, SES message ID, recipients, headers, tags, timeline, raw MIME, and a rendered preview on one screen.',
+        title: 'Send from the tools you already use',
+        body: 'Use the Laravel transport, transactional API, dashboard composer, or reusable templates. Larasend keeps every request and delivery event together.',
         accent: 'mint',
     },
     {
-        title: '"Did DNS actually propagate?"',
-        body: 'Add an SES identity, copy DKIM records, re-check DNS with one click, and see exactly what is still missing before production traffic moves.',
+        title: 'Turn replies into team conversations',
+        body: 'Receive inbound mail, reply and forward with attachments, assign owners, add notes and tags, set priority, snooze work, and keep the full thread in one place.',
         accent: 'blue',
     },
     {
-        title: '"Do we have to rewrite our mail code?"',
-        body: 'No. Set MAIL_MAILER=larasend and every mailable, notification, and queued send you already have flows through Larasend unchanged.',
+        title: 'Bring SES or Cloudflare',
+        body: 'Connect Amazon SES or Cloudflare Email Sending. Credentials, sending domains, DNS verification, quota, and provider capabilities stay visible.',
         accent: 'violet',
     },
     {
-        title: '"Why did our webhook miss that bounce?"',
-        body: 'SES events are signature-verified, normalized, retried, and visible with request status, latency, endpoint health, and failure history.',
+        title: 'Protect your deliverability',
+        body: 'Investigate bounces and complaints, maintain suppressions, monitor rates, and trace each message from submission through its latest provider event.',
         accent: 'amber',
+    },
+    {
+        title: 'Operate with fewer blind spots',
+        body: 'See failed sends, inbox workload, domain readiness, webhook failures, quota, queue workers, and scheduler health from one operational dashboard.',
+        accent: 'mint',
+    },
+    {
+        title: 'Give every project a clean boundary',
+        body: 'Separate environments and applications with projects, scoped API keys, workspace roles, domains, templates, and retention controls.',
+        accent: 'blue',
     },
 ];
 
@@ -106,18 +116,18 @@ const setupSteps = [
     ],
     [
         '02',
-        'Connect Amazon SES',
-        'Paste SES credentials for sending, quota reads, identity checks, and event configuration.',
+        'Choose your sending provider',
+        'Connect Amazon SES with IAM credentials or an instance role, or connect Cloudflare Email Sending with an API token.',
     ],
     [
         '03',
-        'Verify your domain',
-        'Copy DKIM, SPF, DMARC, and bounce records into Route 53 or your DNS provider.',
+        'Onboard your domain',
+        'Create and verify the DNS records Larasend shows. Cloudflare-managed domains can be provisioned automatically.',
     ],
     [
         '04',
-        'Create an API key',
-        'Reveal the key once, copy it into your Laravel apps, and start sending transactional mail.',
+        'Send, receive, and collaborate',
+        'Create an API key, send a test message, enable inbound routing, and bring your team into the shared inbox.',
     ],
 ];
 
@@ -156,7 +166,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <Head title="The email dashboard AWS never built">
+    <Head title="Self-hosted email operations for product teams">
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
             rel="preconnect"
@@ -236,20 +246,22 @@ onBeforeUnmount(() => {
                 <div class="eyebrow reveal">
                     <span class="pill">open source</span>
                     <span class="pulse-dot"></span>
-                    <span>Self-hosted · Powered by your own AWS SES</span>
+                    <span
+                        >Self-hosted · Amazon SES or Cloudflare Email
+                        Sending</span
+                    >
                 </div>
 
                 <h1 class="reveal hero-title">
-                    <span class="line">The email dashboard</span>
-                    <span class="line accent-line">AWS never built.</span>
+                    <span class="line">Send, receive, and run</span>
+                    <span class="line accent-line">email on your terms.</span>
                 </h1>
 
                 <p class="lede reveal">
-                    SES gives you cheap, reliable sending — and nothing else. No
-                    dashboard, no delivery timeline, no content previews, no API
-                    keys, no suppression list. Larasend is the missing control
-                    plane: self-hosted, Laravel-native, and running entirely on
-                    your own AWS account.
+                    Larasend is the open-source email operations layer for
+                    product teams. Send through SES or Cloudflare, receive
+                    replies in a collaborative inbox, monitor deliverability,
+                    and keep your email data on infrastructure you control.
                 </p>
 
                 <div class="install-cmd reveal">
@@ -294,13 +306,13 @@ onBeforeUnmount(() => {
                     <div style="--stagger: 0ms">
                         <strong>~$0.10</strong>
                         <span
-                            >per 1,000 emails — SES pricing, we charge
-                            nothing</span
+                            >per 1,000 emails with SES — Larasend adds no
+                            sending markup</span
                         >
                     </div>
                     <div style="--stagger: 70ms">
                         <strong>5 min</strong>
-                        <span>from docker compose up to dashboard</span>
+                        <span>from Docker Compose to guided setup</span>
                     </div>
                     <div style="--stagger: 140ms">
                         <strong>100%</strong>
@@ -327,9 +339,9 @@ onBeforeUnmount(() => {
                     <span>Invoices</span>
                     <span>Product notifications</span>
                     <span>Lifecycle email</span>
-                    <span>Webhook audits</span>
+                    <span>Team inbox</span>
                     <span>Suppression lists</span>
-                    <span>SES quota</span>
+                    <span>Provider quota</span>
                     <span>DKIM checks</span>
                     <span>Raw MIME</span>
                     <span>Receipts</span>
@@ -337,9 +349,9 @@ onBeforeUnmount(() => {
                     <span>Invoices</span>
                     <span>Product notifications</span>
                     <span>Lifecycle email</span>
-                    <span>Webhook audits</span>
+                    <span>Team inbox</span>
                     <span>Suppression lists</span>
-                    <span>SES quota</span>
+                    <span>Provider quota</span>
                     <span>DKIM checks</span>
                     <span>Raw MIME</span>
                 </div>
@@ -348,11 +360,11 @@ onBeforeUnmount(() => {
             <section id="features" class="section container">
                 <div class="section-head reveal">
                     <span>Built for product teams</span>
-                    <h2>Every send visible. Every event accountable.</h2>
+                    <h2>One place to send, receive, and operate email.</h2>
                     <p>
-                        Larasend gives your team the pieces raw SES does not:
-                        API keys, activity, previews, domains, webhook retries,
-                        and a Laravel-first integration path.
+                        Start with a Laravel-native sending API, then manage the
+                        full operational loop: inbound replies, team ownership,
+                        delivery health, domains, webhooks, and access.
                     </p>
                 </div>
 
@@ -387,7 +399,8 @@ onBeforeUnmount(() => {
                         <li>Symfony Mailer transport for Laravel mail.</li>
                         <li>Direct client for transactional API sends.</li>
                         <li>
-                            Clear failures when SES rejects or throttles mail.
+                            Clear failures when a provider rejects or throttles
+                            mail.
                         </li>
                     </ul>
                 </div>
@@ -431,10 +444,11 @@ Larasend::emails()->send([
                         reputation management.
                     </p>
                     <p>
-                        We didn't want to run a mail server. We wanted SES with
-                        a real product around it. So we built Larasend, ran it
-                        in production for our own transactional email, and now
-                        it's yours.
+                        We didn't want to run a mail server. We wanted the
+                        economics and control of infrastructure providers with
+                        the workflow of a real product. So we built Larasend,
+                        ran it for our own transactional email, and opened it
+                        up.
                     </p>
                 </div>
             </section>
@@ -443,11 +457,11 @@ Larasend::emails()->send([
                 <div class="section-head reveal">
                     <span>Install to first send</span>
                     <h2>
-                        Production setup without a weekend in the AWS console.
+                        Production setup without a weekend in provider consoles.
                     </h2>
                     <p>
                         Larasend stays self-hosted first. Bring your database,
-                        your AWS account, and your sending domain.
+                        an SES or Cloudflare account, and your sending domain.
                     </p>
                 </div>
 
@@ -470,13 +484,13 @@ Larasend::emails()->send([
                     <div class="compare-title">
                         <span>Why Larasend</span>
                         <h2>
-                            The dashboard of a hosted API. The ownership of raw
-                            SES.
+                            The workflow of a hosted platform. The ownership of
+                            self-hosted infrastructure.
                         </h2>
                     </div>
                     <div class="compare-table">
                         <div>
-                            <b>Capability</b><b>Raw SES</b
+                            <b>Capability</b><b>Raw provider</b
                             ><b>Hosted email APIs</b><b>Larasend</b>
                         </div>
                         <div>
@@ -487,6 +501,16 @@ Larasend::emails()->send([
                             <span>Laravel mail transport</span><em>Build it</em
                             ><em>SDK migration</em
                             ><strong>One line of .env</strong>
+                        </div>
+                        <div>
+                            <span>Shared inbox and replies</span
+                            ><em>Build it</em><em>Usually separate</em
+                            ><strong>Included</strong>
+                        </div>
+                        <div>
+                            <span>SES and Cloudflare support</span
+                            ><em>One provider</em><em>Vendor platform</em
+                            ><strong>Choose either</strong>
                         </div>
                         <div>
                             <span>Webhook retries and logs</span
@@ -518,8 +542,8 @@ Larasend::emails()->send([
                     </h2>
                     <p>
                         Larasend is designed for teams that want a polished mail
-                        API and dashboard running on their own SES account,
-                        their own storage, and a codebase they can inspect.
+                        API, shared inbox, and operational dashboard running on
+                        their own provider accounts, storage, and codebase.
                     </p>
                     <div class="cta-row">
                         <a
@@ -552,12 +576,13 @@ Larasend::emails()->send([
                         <b>savvyagents / larasend</b>
                     </div>
                     <p>
-                        Open-source SES dashboard, sending API, webhook router,
-                        and Laravel mailer package.
+                        Open-source sending API, collaborative inbox,
+                        deliverability console, and Laravel mailer package.
                     </p>
                     <ul>
                         <li><span></span> Vue + Inertia dashboard</li>
-                        <li><span></span> Amazon SES v2 sending</li>
+                        <li><span></span> Amazon SES and Cloudflare sending</li>
+                        <li><span></span> Inbound email and shared inbox</li>
                         <li><span></span> Docker Compose install</li>
                         <li><span></span> Laravel package integration</li>
                     </ul>
@@ -565,11 +590,10 @@ Larasend::emails()->send([
             </section>
 
             <section id="cta" class="final-cta reveal container">
-                <h2>From zero to sending in one command.</h2>
+                <h2>Own the whole email workflow.</h2>
                 <p>
-                    Pull the compose file, add your SES credentials, and start
-                    sending transactional email with the observability your team
-                    needs.
+                    Pull the compose file, connect your provider, and give your
+                    team one place to send, receive, investigate, and respond.
                 </p>
                 <div class="install-cmd">
                     <code>{{ installCommand }}</code>
@@ -619,8 +643,8 @@ Larasend::emails()->send([
                         ><span>larasend</span>
                     </div>
                     <p>
-                        Open-source email infrastructure for Laravel teams
-                        running on Amazon SES.
+                        Open-source email operations for Laravel teams using
+                        Amazon SES or Cloudflare Email Sending.
                     </p>
                 </div>
                 <a href="#features">Features</a>
@@ -643,7 +667,7 @@ Larasend::emails()->send([
                         >Savvy Agents</a
                     >.</span
                 >
-                <span>Docker-ready · Laravel-native · SES-backed</span>
+                <span>Docker-ready · Laravel-native · Provider-flexible</span>
             </div>
         </footer>
     </div>
@@ -1287,7 +1311,7 @@ footer a:hover {
 
 .features-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 14px;
 }
 

@@ -3,6 +3,8 @@ import {
     Activity,
     AlertTriangle,
     Copy,
+    FileText,
+    Inbox,
     KeyRound,
     MailCheck,
     Power,
@@ -188,15 +190,17 @@ const metrics = computed(() => [
 ]);
 
 const navItems: NavItem[] = [
-    { label: 'Activity', icon: Activity, count: '16' },
-    { label: 'Sent', icon: Send, count: '16' },
+    { label: 'Dashboard', icon: Activity },
+    { label: 'Inbox', icon: Inbox, count: '4' },
+    { label: 'Outbound', icon: Send, count: '16' },
     { label: 'Bounces', icon: Activity, count: '2' },
     { label: 'Complaints', icon: AlertTriangle, count: '1' },
     { label: 'Suppressions', icon: Power, count: '2' },
 ];
 
 const configItems: NavItem[] = [
-    { label: 'Identities', icon: MailCheck },
+    { label: 'Templates', icon: FileText },
+    { label: 'Domains', icon: MailCheck },
     { label: 'Webhooks', icon: Activity },
     { label: 'API keys', icon: KeyRound },
 ];
@@ -325,7 +329,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="preview-crumb">
                 <span>Project</span><i>/</i><b>harborlight</b><i>/</i
-                ><strong>Activity</strong>
+                ><strong>Outbound</strong>
             </div>
             <button
                 class="preview-search"
@@ -367,7 +371,7 @@ onBeforeUnmount(() => {
                         v-for="item in navItems"
                         :key="item.label"
                         type="button"
-                        :class="{ active: item.label === 'Activity' }"
+                        :class="{ active: item.label === 'Outbound' }"
                     >
                         <component :is="item.icon" />
                         <b>{{ item.label }}</b>
@@ -389,13 +393,13 @@ onBeforeUnmount(() => {
                     <span>Stored sends</span>
                     <strong>209,340</strong>
                     <div><i></i></div>
-                    <small>Last 30 days · SES quota sync optional</small>
+                    <small>Last 30 days · provider quota synced</small>
                 </div>
             </aside>
 
             <main class="preview-main">
                 <section class="preview-titlebar">
-                    <h3>Activity</h3>
+                    <h3>Outbound</h3>
                     <span><i></i> live</span>
                     <button type="button">Export</button>
                 </section>

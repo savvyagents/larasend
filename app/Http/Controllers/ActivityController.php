@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\BuildProjectDashboard;
 use App\Enums\SourceProvider;
 use App\Models\Email;
 use App\Models\Project;
@@ -28,6 +29,7 @@ class ActivityController extends Controller
     public function __construct(
         private EmailProviderFactory $providers,
         private SystemHealth $systemHealth,
+        private BuildProjectDashboard $buildProjectDashboard,
     ) {}
 
     public function __invoke(Request $request, ProjectContext $context): Response|RedirectResponse
@@ -66,6 +68,17 @@ class ActivityController extends Controller
 
         $selected = $emails->first();
         $canSend = $source ? $this->canSend($project, $source) : false;
+        $range = $request->string('range', '14d')->toString();
+        $system = [
+            'worker_alive' => $this->systemHealth->workerIsAlive(),
+            'worker_last_seen' => $this->systemHealth->workerHeartbeatAt()?->diffForHumans(),
+            'scheduler_alive' => $this->systemHealth->schedulerIsAlive(),
+            'scheduler_last_seen' => $this->systemHealth->schedulerHeartbeatAt()?->diffForHumans(),
+            'stuck_queued' => $this->systemHealth->stuckQueuedEmailCount($project),
+        ];
+        $inboxUnread = $this->unreadInboxThreads($project, $user)->count();
+        $quota = $this->quota($project, $source);
+        [$currentStart, $currentEnd] = $this->metricPeriods($range);
 
         return Inertia::render('Activity', [
             'project' => [
@@ -114,9 +127,21 @@ class ActivityController extends Controller
             'section' => $section,
             'filters' => [
                 'q' => $request->string('q')->toString(),
-                'range' => $request->string('range', '14d')->toString(),
+                'range' => $range,
             ],
-            'metrics' => $this->metrics($project, $request->string('range', '14d')->toString()),
+            'metrics' => $this->metrics($project, $range),
+            'dashboard' => $this->buildProjectDashboard->execute(
+                project: $project,
+                source: $source,
+                user: $user,
+                range: $range,
+                currentStart: $currentStart,
+                currentEnd: $currentEnd,
+                system: $system,
+                quota: $quota,
+                inboxUnread: $inboxUnread,
+                sourceReady: $canSend,
+            ),
             'bounceMetrics' => $this->bounceMetrics($project),
             'bounceQueue' => $this->bounceQueue($project, $request),
             'emails' => $emails->map(fn (Email $email) => $this->serializeEmail($email, detailed: true)),
@@ -170,9 +195,13 @@ class ActivityController extends Controller
                 'complaints' => $project->emails()->where('status', 'complained')->count(),
                 'suppressions' => $project->suppressions()->count(),
             ],
-            'inboxUnread' => $this->activeInboxThreads($project)->whereNull('read_at')->count(),
+            'inboxUnread' => $inboxUnread,
             'recentThreads' => $section === 'activity'
                 ? $this->activeInboxThreads($project)
+                    ->with([
+                        'assignedTo:id,name',
+                        'userStates' => fn ($query) => $query->where('user_id', $user->id),
+                    ])
                     ->orderByDesc('last_activity_at')
                     ->limit(5)
                     ->get([
@@ -183,19 +212,16 @@ class ActivityController extends Controller
                         'last_direction',
                         'message_count',
                         'read_at',
+                        'status',
+                        'priority',
+                        'assigned_to_user_id',
                         'last_activity_at',
                     ])
-                    ->map(fn (Thread $thread): array => $this->serializeThreadSummary($thread))
+                    ->map(fn (Thread $thread): array => $this->serializeThreadSummary($thread, $user->id))
                     ->values()
                 : [],
-            'quota' => $this->quota($project, $source),
-            'system' => [
-                'worker_alive' => $this->systemHealth->workerIsAlive(),
-                'worker_last_seen' => $this->systemHealth->workerHeartbeatAt()?->diffForHumans(),
-                'scheduler_alive' => $this->systemHealth->schedulerIsAlive(),
-                'scheduler_last_seen' => $this->systemHealth->schedulerHeartbeatAt()?->diffForHumans(),
-                'stuck_queued' => $this->systemHealth->stuckQueuedEmailCount($project),
-            ],
+            'quota' => $quota,
+            'system' => $system,
         ]);
     }
 
@@ -409,17 +435,28 @@ class ActivityController extends Controller
     {
         return $project->threads()
             ->whereNull('archived_at')
+            ->where('status', '!=', 'closed')
             ->where(function ($query): void {
                 $query->whereNull('snoozed_until')
                     ->orWhere('snoozed_until', '<=', now());
             });
     }
 
+    private function unreadInboxThreads(Project $project, User $user): HasMany
+    {
+        return $this->activeInboxThreads($project)
+            ->whereDoesntHave('userStates', fn ($query) => $query
+                ->where('user_id', $user->id)
+                ->whereNotNull('read_at'));
+    }
+
     /**
      * @return array<string, mixed>
      */
-    private function serializeThreadSummary(Thread $thread): array
+    private function serializeThreadSummary(Thread $thread, int $userId): array
     {
+        $userState = $thread->userStates->firstWhere('user_id', $userId);
+
         return [
             'public_id' => $thread->public_id,
             'subject' => $thread->subject,
@@ -427,7 +464,10 @@ class ActivityController extends Controller
             'snippet' => $thread->last_snippet,
             'direction' => $thread->last_direction,
             'message_count' => $thread->message_count,
-            'unread' => $thread->read_at === null,
+            'unread' => $userState?->read_at === null,
+            'status' => $thread->status,
+            'priority' => $thread->priority,
+            'assigned_to' => $thread->assignedTo?->name,
             'last_activity_at' => $thread->last_activity_at?->toIso8601String(),
             'last_activity_human' => $thread->last_activity_at?->diffForHumans(short: true),
         ];
@@ -515,7 +555,9 @@ class ActivityController extends Controller
     {
         $endpointIds = $project->webhookEndpoints()->pluck('id');
         $endpoints = $project->webhookEndpoints()->with('latestDelivery')->get();
-        $deliveries = WebhookDelivery::query()->whereIn('webhook_endpoint_id', $endpointIds);
+        $deliveries = WebhookDelivery::query()
+            ->whereIn('webhook_endpoint_id', $endpointIds)
+            ->where('delivered_at', '>=', now()->subDays(30));
         $total = (clone $deliveries)->count();
         $success = (clone $deliveries)->where('status', 'ok')->count();
         $failing = $endpoints->filter(fn (WebhookEndpoint $endpoint) => $this->webhookStatusFor($endpoint) === 'failing')->count();
@@ -549,14 +591,17 @@ class ActivityController extends Controller
     }
 
     /**
-     * @return array{sent: int, limit: int|null, rate: float|null, checkedAt: string|null}
+     * @return array{sent: int, limit: int|null, rate: float|null, sentLast24Hours: float|null, checkedAt: string|null}
      */
     private function quota(Project $project, ?Source $source): array
     {
         $lastQuota = $source?->last_quota ?? [];
 
         return [
-            'sent' => $project->emails()->where('created_at', '>=', now()->subDays(30))->count(),
+            'sent' => $project->emails()
+                ->where('created_at', '>=', now()->subDays(30))
+                ->whereNotIn('status', ['queued', 'failed'])
+                ->count(),
             'limit' => $this->quotaValue($lastQuota, ['Max24HourSend', 'max24HourSend', 'max_24_hour_send']),
             'rate' => $this->quotaValue($lastQuota, ['MaxSendRate', 'maxSendRate', 'max_send_rate']),
             'sentLast24Hours' => $this->quotaValue($lastQuota, ['SentLast24Hours', 'sentLast24Hours', 'sent_last_24_hours']),
@@ -701,17 +746,25 @@ class ActivityController extends Controller
      */
     private function metricCounts(Project $project, CarbonInterface $start, CarbonInterface $end): array
     {
-        $baseQuery = $project->emails()
+        $counts = $project->emails()
             ->where('created_at', '>=', $start)
-            ->where('created_at', '<=', $end);
+            ->where('created_at', '<=', $end)
+            ->toBase()
+            ->selectRaw("count(case when status not in ('queued', 'failed') then 1 end) as sent")
+            ->selectRaw("count(case when status in ('delivered', 'opened', 'clicked') then 1 end) as delivered")
+            ->selectRaw("count(case when status in ('opened', 'clicked') then 1 end) as opened")
+            ->selectRaw("count(case when status = 'clicked' then 1 end) as clicked")
+            ->selectRaw("count(case when status = 'bounced' then 1 end) as bounced")
+            ->selectRaw("count(case when status = 'complained' then 1 end) as complained")
+            ->first();
 
         return [
-            'sent' => (clone $baseQuery)->count(),
-            'delivered' => (clone $baseQuery)->whereIn('status', ['delivered', 'opened', 'clicked'])->count(),
-            'opened' => (clone $baseQuery)->whereIn('status', ['opened', 'clicked'])->count(),
-            'clicked' => (clone $baseQuery)->where('status', 'clicked')->count(),
-            'bounced' => (clone $baseQuery)->where('status', 'bounced')->count(),
-            'complained' => (clone $baseQuery)->where('status', 'complained')->count(),
+            'sent' => (int) ($counts->sent ?? 0),
+            'delivered' => (int) ($counts->delivered ?? 0),
+            'opened' => (int) ($counts->opened ?? 0),
+            'clicked' => (int) ($counts->clicked ?? 0),
+            'bounced' => (int) ($counts->bounced ?? 0),
+            'complained' => (int) ($counts->complained ?? 0),
         ];
     }
 

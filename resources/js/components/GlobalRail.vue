@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Link, usePage } from '@inertiajs/vue3';
+import { Link, router, usePage } from '@inertiajs/vue3';
 import {
     Activity,
     AlertTriangle,
@@ -10,13 +10,17 @@ import {
     Inbox,
     KeyRound,
     LayoutDashboard,
+    LogOut,
     Settings2,
     SlidersHorizontal,
+    UserRound,
     Users,
     Webhook,
     X,
 } from 'lucide-vue-next';
 import { computed, ref } from 'vue';
+import { logout } from '@/routes';
+import { edit as editProfile } from '@/routes/profile';
 
 type ProjectOption = {
     name: string;
@@ -37,12 +41,14 @@ const props = withDefaults(
         counts?: Record<string, number>;
         inboxUnread?: number;
         buildLabel?: string;
+        accountActive?: boolean;
     }>(),
     {
         projects: () => [],
         counts: () => ({}),
         inboxUnread: 0,
         buildLabel: '',
+        accountActive: false,
     },
 );
 
@@ -51,6 +57,10 @@ const page = usePage<{
 }>();
 const projectMenuOpen = ref(false);
 const mobileMenuOpen = ref(false);
+
+function handleLogout(): void {
+    router.flushAll();
+}
 
 const userInitials = computed(() =>
     page.props.auth.user.name
@@ -306,8 +316,12 @@ const mobileItems = computed(() => [
 
         <div class="border-t border-zinc-200 p-3 dark:border-[#1d2125]">
             <Link
-                href="/settings/profile"
+                :href="editProfile()"
                 class="flex items-center gap-3 rounded-lg p-2 transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
+                :class="{
+                    'bg-zinc-100 ring-1 ring-zinc-200 dark:bg-[#16191c] dark:ring-[#25292d]':
+                        accountActive,
+                }"
             >
                 <span
                     class="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-300 to-teal-300 font-mono text-[10px] font-semibold text-[#0b0c0d]"
@@ -322,6 +336,16 @@ const mobileItems = computed(() => [
                         {{ page.props.auth.user.email }}
                     </span>
                 </span>
+            </Link>
+            <Link
+                :href="logout()"
+                as="button"
+                class="mt-1 flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-semibold text-zinc-500 transition hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-500/10 dark:hover:text-red-300"
+                data-test="global-logout-button"
+                @click="handleLogout"
+            >
+                <LogOut class="size-3.5" />
+                Log out
             </Link>
             <p
                 v-if="buildLabel"
@@ -398,6 +422,28 @@ const mobileItems = computed(() => [
                 </Link>
             </section>
         </nav>
+
+        <Link
+            :href="editProfile()"
+            class="mt-5 flex min-h-11 items-center gap-3 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700 dark:border-[#25292d] dark:bg-[#111315] dark:text-zinc-200"
+            @click="mobileMenuOpen = false"
+        >
+            <UserRound class="size-4 text-teal-600 dark:text-teal-300" />
+            <span class="min-w-0 flex-1">Account settings</span>
+            <span class="truncate text-xs font-normal text-zinc-500">
+                {{ page.props.auth.user.name }}
+            </span>
+        </Link>
+        <Link
+            :href="logout()"
+            as="button"
+            class="mt-2 flex min-h-11 w-full items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300"
+            data-test="mobile-logout-button"
+            @click="handleLogout"
+        >
+            <LogOut class="size-4" />
+            Log out
+        </Link>
     </section>
 
     <nav

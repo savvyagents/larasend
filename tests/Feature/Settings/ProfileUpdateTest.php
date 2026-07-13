@@ -9,7 +9,17 @@ test('profile page is displayed', function () {
         ->actingAs($user)
         ->get(route('profile.edit'));
 
-    $response->assertOk();
+    $response
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('settings/Profile')
+            ->where('settingsNavigation.project.name', 'My Project')
+            ->where('settingsNavigation.project.slug', 'my-project')
+            ->where('settingsNavigation.project.path', '/projects/my-project')
+            ->where('settingsNavigation.projects.0.is_current', true)
+            ->has('settingsNavigation.counts')
+            ->where('settingsNavigation.inbox_unread', 0)
+        );
 });
 
 test('profile information can be updated', function () {

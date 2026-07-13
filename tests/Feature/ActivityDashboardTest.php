@@ -31,6 +31,13 @@ it('renders the activity dashboard for authenticated users', function () {
             ->component('Activity')
             ->has('project')
             ->has('metrics', 6)
+            ->where('dashboard.outbound.total', 12)
+            ->where('dashboard.outbound.bounced', 1)
+            ->where('dashboard.outbound.complained', 1)
+            ->where('dashboard.configuration.verified_domains', 1)
+            ->where('dashboard.developer.active_webhooks', 2)
+            ->where('dashboard.developer.failing_webhooks', 1)
+            ->has('dashboard.trend', 8)
             ->has('recentThreads', 0)
             ->where('metrics', fn ($metrics) => collect($metrics)->every(fn (array $metric) => $metric['delta'] !== 'live'))
             ->has('suppressions', 2)
@@ -64,6 +71,9 @@ it('renders recent active inbox conversations on the dashboard', function () {
         'last_snippet' => 'Could you send another copy?',
         'message_count' => 2,
         'last_activity_at' => now(),
+        'status' => 'pending',
+        'priority' => 'urgent',
+        'assigned_to_user_id' => $user->id,
     ]);
 
     Thread::query()->create([
@@ -88,7 +98,59 @@ it('renders recent active inbox conversations on the dashboard', function () {
             ->where('recentThreads.0.public_id', 'thread_recent')
             ->where('recentThreads.0.subject', 'Need help with my receipt')
             ->where('recentThreads.0.unread', true)
+            ->where('recentThreads.0.status', 'pending')
+            ->where('recentThreads.0.priority', 'urgent')
+            ->where('recentThreads.0.assigned_to', $user->name)
             ->where('inboxUnread', 1)
+            ->where('dashboard.inbox.open', 1)
+            ->where('dashboard.inbox.mine', 1)
+            ->where('dashboard.inbox.unassigned', 0)
+            ->where('dashboard.inbox.urgent', 1)
+            ->where('dashboard.inbox.pending', 1)
+            ->where('dashboard.inbox.snoozed', 1)
+        );
+});
+
+it('keeps recent activity capped while dashboard totals remain exact', function () {
+    $user = User::factory()->create();
+    $project = seedActivityDashboardData($user);
+    $source = $project->sources()->firstOrFail();
+
+    foreach (range(1, 45) as $index) {
+        Email::create([
+            'public_id' => 'email_volume_'.$index,
+            'workspace_id' => $project->workspace_id,
+            'project_id' => $project->id,
+            'source_id' => $source->id,
+            'environment' => $source->environment,
+            'status' => 'delivered',
+            'from_email' => 'receipts@larasend.app',
+            'subject' => 'Volume message '.$index,
+        ]);
+    }
+
+    foreach (['queued', 'failed'] as $status) {
+        Email::create([
+            'public_id' => 'email_'.$status,
+            'workspace_id' => $project->workspace_id,
+            'project_id' => $project->id,
+            'source_id' => $source->id,
+            'environment' => $source->environment,
+            'status' => $status,
+            'from_email' => 'receipts@larasend.app',
+            'subject' => ucfirst($status).' message',
+        ]);
+    }
+
+    $this->actingAs($user)
+        ->get('/activity')
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page
+            ->has('emails', 50)
+            ->where('dashboard.outbound.total', 59)
+            ->where('dashboard.outbound.queued', 1)
+            ->where('dashboard.outbound.failed', 1)
+            ->where('metrics.0.value', '57')
         );
 });
 
