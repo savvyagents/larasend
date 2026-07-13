@@ -28,6 +28,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GlobalRail from '@/components/GlobalRail.vue';
 import RichTextEditor from '@/components/RichTextEditor.vue';
 import { Toaster } from '@/components/ui/sonner';
+import { inbox as inboxRoute } from '@/routes/projects';
 
 type ThreadRow = {
     public_id: string;
@@ -137,7 +138,7 @@ const tagInput = ref('');
 const notificationsEnabled = ref(false);
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 
-const inboxPath = computed(() => `${props.project.path}/inbox`);
+const inboxPath = computed(() => inboxRoute.url(props.project.slug));
 
 const mailboxes = computed(() => [
     {
@@ -197,12 +198,15 @@ function visitInbox(params: Record<string, string | null>): void {
 }
 
 function openMailbox(key: string): void {
-    visitInbox({ mailbox: key, thread: null });
+    visitInbox({ mailbox: key, address: null, thread: null });
 }
 
 function filterAddress(address: string): void {
+    const isSelected = props.address === address;
+
     visitInbox({
-        address: props.address === address ? null : address,
+        mailbox: isSelected ? 'inbox' : 'all',
+        address: isSelected ? null : address,
         thread: null,
     });
 }
@@ -339,6 +343,10 @@ const emptyMessage = computed(() => {
         return 'No conversations match your search.';
     }
 
+    if (props.address) {
+        return `No conversations for ${props.address}.`;
+    }
+
     if (props.mailbox === 'unread') {
         return 'You are caught up. There are no unread conversations.';
     }
@@ -455,7 +463,10 @@ onBeforeUnmount(() => {
 
 usePoll(
     10000,
-    { only: ['threads', 'counts', 'selectedThread'], showProgress: false },
+    {
+        only: ['threads', 'counts', 'addresses', 'selectedThread'],
+        showProgress: false,
+    },
     { autoStart: true },
 );
 

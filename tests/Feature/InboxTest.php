@@ -74,7 +74,7 @@ it('renders the inbox with threads, counts, and interleaved messages', function 
             ->where('addresses.0.address', 'support@example.com'));
 });
 
-it('counts and filters addresses by distinct conversations in the current mailbox', function () {
+it('keeps address views stable and counts distinct conversations', function () {
     [$user, $project, $source] = inboxFixture();
 
     Queue::fake();
@@ -90,20 +90,23 @@ it('counts and filters addresses by distinct conversations in the current mailbo
     $archivedThread->forceFill(['archived_at' => now()])->save();
 
     $this->actingAs($user)
-        ->get("/projects/{$project->slug}/inbox?mailbox=inbox&address=support%40example.com")
+        ->get("/projects/{$project->slug}/inbox?mailbox=inbox")
         ->assertInertia(fn ($page) => $page
-            ->has('addresses', 1)
+            ->has('addresses', 2)
             ->where('addresses.0.address', 'support@example.com')
             ->where('addresses.0.count', 2)
+            ->where('addresses.1.address', 'archive@example.com')
+            ->where('addresses.1.count', 1)
             ->has('threads', 2));
 
     $this->actingAs($user)
-        ->get("/projects/{$project->slug}/inbox?mailbox=archived")
+        ->get("/projects/{$project->slug}/inbox?mailbox=all&address=archive%40example.com")
         ->assertInertia(fn ($page) => $page
-            ->has('addresses', 1)
-            ->where('addresses.0.address', 'archive@example.com')
-            ->where('addresses.0.count', 1)
-            ->has('threads', 1));
+            ->where('mailbox', 'all')
+            ->where('address', 'archive@example.com')
+            ->has('addresses', 2)
+            ->has('threads', 1)
+            ->where('threads.0.subject', 'Archived address'));
 });
 
 it('marks a thread read when opened explicitly', function () {

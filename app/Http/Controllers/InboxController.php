@@ -70,7 +70,7 @@ class InboxController extends Controller
             'mailbox' => $mailbox,
             'address' => $address,
             'filters' => ['q' => $search, 'assigned' => $assigned],
-            'addresses' => $this->addresses($project, $user->id, $mailbox),
+            'addresses' => $this->addresses($project),
             'counts' => [
                 'inbox' => $project->threads()->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->count(),
                 'unread' => $project->threads()->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->whereDoesntHave('userStates', fn ($query) => $query->where('user_id', $user->id)->whereNotNull('read_at'))->count(),
@@ -256,11 +256,10 @@ class InboxController extends Controller
      *
      * @return array<int, array{address: string, count: int}>
      */
-    private function addresses(Project $project, int $userId, string $mailbox): array
+    private function addresses(Project $project): array
     {
         return $project->inboundEmails()
             ->whereNotNull('thread_id')
-            ->whereHas('thread', fn (Builder $query) => $this->applyMailbox($query, $mailbox, $userId))
             ->selectRaw('LOWER(to_email) as address, count(distinct thread_id) as total')
             ->groupByRaw('LOWER(to_email)')
             ->orderByDesc('total')
