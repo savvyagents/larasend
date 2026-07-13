@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasTable('threads')) {
+            return;
+        }
+
         Schema::create('threads', function (Blueprint $table) {
             $table->id();
             $table->string('public_id')->unique();
