@@ -108,7 +108,9 @@ it('starts a new conversation from the compose modal', function () {
 
     $this->actingAs($user)
         ->post("/projects/{$project->slug}/inbox/compose", [
-            'to' => 'lead@customer.test',
+            'to' => 'lead@customer.test, billing@customer.test',
+            'cc' => 'sales@customer.test, owner@customer.test',
+            'bcc' => 'audit@example.com',
             'subject' => 'Welcome aboard',
             'text' => 'Glad to have you!',
         ])
@@ -119,7 +121,30 @@ it('starts a new conversation from the compose modal', function () {
     expect($email->from_email)->toBe('support@example.com')
         ->and($email->thread)->not->toBeNull()
         ->and($email->thread->subject)->toBe('Welcome aboard')
-        ->and($email->thread->last_direction)->toBe('outbound');
+        ->and($email->thread->last_direction)->toBe('outbound')
+        ->and($email->recipients()->where('type', 'to')->count())->toBe(2)
+        ->and($email->recipients()->where('type', 'cc')->count())->toBe(2)
+        ->and($email->recipients()->where('type', 'bcc')->value('email'))->toBe('audit@example.com');
+});
+
+it('replies to copied participants when reply all is selected', function () {
+    [$user, $project, $source] = replyFixture();
+    Queue::fake();
+    receiveReplyableEmail($this, $source);
+    $thread = Thread::query()->firstOrFail();
+    $inbound = InboundEmail::query()->firstOrFail();
+    $inbound->forceFill(['headers' => [...$inbound->headers, 'Cc' => 'finance@customer.test, support@example.com']])->save();
+
+    $this->actingAs($user)
+        ->post("/projects/{$project->slug}/threads/{$thread->public_id}/reply", [
+            'text' => 'Replying to everyone',
+            'reply_all' => true,
+        ])
+        ->assertRedirect();
+
+    $email = Email::query()->firstOrFail();
+    expect($email->recipients()->where('type', 'cc')->pluck('email')->all())
+        ->toBe(['finance@customer.test']);
 });
 
 it('blocks replies from members without send permission', function () {

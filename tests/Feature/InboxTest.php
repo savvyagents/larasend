@@ -3,6 +3,7 @@
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Thread;
+use App\Models\ThreadUserState;
 use App\Models\User;
 use App\Models\Workspace;
 use Illuminate\Support\Facades\Queue;
@@ -27,11 +28,11 @@ function inboxFixture(): array
     return [$user, $project, $source];
 }
 
-function receiveThreadedEmail($test, Source $source, string $subject, string $messageId, string $from = 'maya@customer.test'): void
+function receiveThreadedEmail($test, Source $source, string $subject, string $messageId, string $from = 'maya@customer.test', string $to = 'support@example.com'): void
 {
     $mime = implode("\r\n", [
         "From: {$from}",
-        'To: support@example.com',
+        "To: {$to}",
         "Subject: {$subject}",
         "Message-ID: <{$messageId}>",
         'Content-Type: text/plain; charset=utf-8',
@@ -42,7 +43,7 @@ function receiveThreadedEmail($test, Source $source, string $subject, string $me
 
     $test->postJson("/api/webhooks/inbound/cloudflare/{$source->webhook_token}", [
         'from' => $from,
-        'to' => 'support@example.com',
+        'to' => $to,
         'raw' => base64_encode($mime),
     ])->assertStatus(202);
 }
@@ -73,6 +74,41 @@ it('renders the inbox with threads, counts, and interleaved messages', function 
             ->where('addresses.0.address', 'support@example.com'));
 });
 
+it('keeps address views stable and counts distinct conversations', function () {
+    [$user, $project, $source] = inboxFixture();
+
+    Queue::fake();
+
+    receiveThreadedEmail($this, $source, 'Repeated conversation', 'address-1@customer.test');
+    receiveThreadedEmail($this, $source, 'Repeated conversation', 'address-2@customer.test');
+    receiveThreadedEmail($this, $source, 'Another conversation', 'address-3@customer.test');
+    receiveThreadedEmail($this, $source, 'Archived address', 'address-4@customer.test', to: 'archive@example.com');
+
+    $archivedThread = Thread::query()
+        ->whereHas('inboundEmails', fn ($query) => $query->where('to_email', 'archive@example.com'))
+        ->firstOrFail();
+    $archivedThread->forceFill(['archived_at' => now()])->save();
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?mailbox=inbox")
+        ->assertInertia(fn ($page) => $page
+            ->has('addresses', 2)
+            ->where('addresses.0.address', 'support@example.com')
+            ->where('addresses.0.count', 2)
+            ->where('addresses.1.address', 'archive@example.com')
+            ->where('addresses.1.count', 1)
+            ->has('threads', 2));
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?mailbox=all&address=archive%40example.com")
+        ->assertInertia(fn ($page) => $page
+            ->where('mailbox', 'all')
+            ->where('address', 'archive@example.com')
+            ->has('addresses', 2)
+            ->has('threads', 1)
+            ->where('threads.0.subject', 'Archived address'));
+});
+
 it('marks a thread read when opened explicitly', function () {
     [$user, $project, $source] = inboxFixture();
 
@@ -87,7 +123,7 @@ it('marks a thread read when opened explicitly', function () {
         ->get("/projects/{$project->slug}/inbox?thread={$thread->public_id}")
         ->assertInertia(fn ($page) => $page->where('selectedThread.unread', false));
 
-    expect($thread->fresh()->read_at)->not->toBeNull();
+    expect(ThreadUserState::query()->whereBelongsTo($thread)->whereBelongsTo($user)->value('read_at'))->not->toBeNull();
 });
 
 it('archives, restores, and toggles unread through thread actions', function () {
@@ -105,10 +141,61 @@ it('archives, restores, and toggles unread through thread actions', function () 
     expect($thread->fresh()->archived_at)->toBeNull();
 
     $this->actingAs($user)->post("/projects/{$project->slug}/threads/{$thread->public_id}/read");
-    expect($thread->fresh()->read_at)->not->toBeNull();
+    expect(ThreadUserState::query()->whereBelongsTo($thread)->whereBelongsTo($user)->value('read_at'))->not->toBeNull();
 
     $this->actingAs($user)->post("/projects/{$project->slug}/threads/{$thread->public_id}/unread");
-    expect($thread->fresh()->read_at)->toBeNull();
+    expect(ThreadUserState::query()->whereBelongsTo($thread)->whereBelongsTo($user)->value('read_at'))->toBeNull();
+});
+
+it('keeps read state personal while sharing assignment and workflow state', function () {
+    [$owner, $project, $source] = inboxFixture();
+    $member = User::factory()->create();
+    $project->workspace->users()->attach($member, ['role' => 'member']);
+    Queue::fake();
+    receiveThreadedEmail($this, $source, 'Team work', 'team-work@customer.test');
+    $thread = Thread::query()->firstOrFail();
+
+    $this->actingAs($owner)->get("/projects/{$project->slug}/inbox?thread={$thread->public_id}")->assertSuccessful();
+
+    $this->actingAs($member)
+        ->get("/projects/{$project->slug}/inbox?mailbox=unread")
+        ->assertInertia(fn ($page) => $page->has('threads', 1));
+
+    $this->actingAs($owner)
+        ->patch("/projects/{$project->slug}/threads/{$thread->public_id}/workflow", [
+            'status' => 'pending',
+            'priority' => 'high',
+            'assigned_to_user_id' => $member->id,
+        ])
+        ->assertRedirect();
+
+    expect($thread->fresh())
+        ->status->toBe('pending')
+        ->priority->toBe('high')
+        ->assigned_to_user_id->toBe($member->id)
+        ->and($thread->events()->where('type', 'workflow_updated')->exists())->toBeTrue();
+});
+
+it('bulk triages only project-scoped conversations and records activity', function () {
+    [$user, $project, $source] = inboxFixture();
+    Queue::fake();
+    receiveThreadedEmail($this, $source, 'Bulk one', 'bulk-1@customer.test');
+    receiveThreadedEmail($this, $source, 'Bulk two', 'bulk-2@customer.test');
+    $threads = Thread::query()->orderBy('id')->get();
+
+    $this->actingAs($user)
+        ->post("/projects/{$project->slug}/inbox/bulk", [
+            'thread_ids' => $threads->pluck('public_id')->all(),
+            'action' => 'close',
+        ])
+        ->assertRedirect();
+
+    expect(Thread::query()->where('status', 'closed')->count())->toBe(2)
+        ->and($threads->first()->events()->where('type', 'bulk_close')->exists())->toBeTrue();
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?mailbox=closed")
+        ->assertInertia(fn ($page) => $page->has('threads', 2));
 });
 
 it('filters mailboxes and blocks cross-project thread access', function () {

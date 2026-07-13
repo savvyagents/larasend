@@ -40,6 +40,9 @@ class ThreadActionController extends Controller
         $validated = $request->validate([
             'text' => ['required', 'string', 'max:100000'],
             'html' => ['nullable', 'string', 'max:400000'],
+            'reply_all' => ['nullable', 'boolean'],
+            'cc' => ['nullable', 'string', 'max:2000'],
+            'bcc' => ['nullable', 'string', 'max:2000'],
             'attachments' => ['nullable', 'array', 'max:10'],
             'attachments.*' => ['file', 'max:10240'],
         ]);
@@ -62,11 +65,19 @@ class ThreadActionController extends Controller
         $subject = Str::startsWith(Str::lower((string) $thread->subject), 're:')
             ? (string) $thread->subject
             : 'Re: '.$thread->subject;
+        $source = $this->projectContext->currentSource($project);
 
         try {
-            $this->sendService->send($project, $this->projectContext->currentSource($project), [
+            $this->sendService->send($project, $source, [
                 'from' => $lastInbound->to_email,
                 'to' => [$lastInbound->from_email],
+                'cc' => collect($this->recipientList($validated['cc'] ?? ''))
+                    ->merge(($validated['reply_all'] ?? false) ? $this->replyAllRecipients($lastInbound) : [])
+                    ->reject(fn (string $email): bool => collect([$lastInbound->from_email, $lastInbound->to_email, $source?->default_from_email])->filter()->contains(fn (string $own): bool => strcasecmp(trim($email), trim($own)) === 0))
+                    ->unique(fn (string $email): string => Str::lower($email))
+                    ->values()
+                    ->all(),
+                'bcc' => $this->recipientList($validated['bcc'] ?? ''),
                 'subject' => $subject,
                 'text' => $validated['text'],
                 'html' => ($validated['html'] ?? null) ?: $this->textToHtml($validated['text']),
@@ -105,7 +116,9 @@ class ThreadActionController extends Controller
 
         $validated = $request->validate([
             'from' => ['nullable', 'email:rfc'],
-            'to' => ['required', 'email:rfc'],
+            'to' => ['required', 'string', 'max:2000'],
+            'cc' => ['nullable', 'string', 'max:2000'],
+            'bcc' => ['nullable', 'string', 'max:2000'],
             'subject' => ['required', 'string', 'max:255'],
             'text' => ['required', 'string', 'max:100000'],
             'html' => ['nullable', 'string', 'max:400000'],
@@ -118,7 +131,9 @@ class ThreadActionController extends Controller
         try {
             $email = $this->sendService->send($project, $source, [
                 'from' => ($validated['from'] ?? null) ?: $source->default_from_email,
-                'to' => [$validated['to']],
+                'to' => $this->recipientList($validated['to']),
+                'cc' => $this->recipientList($validated['cc'] ?? ''),
+                'bcc' => $this->recipientList($validated['bcc'] ?? ''),
                 'subject' => $validated['subject'],
                 'text' => $validated['text'],
                 'html' => ($validated['html'] ?? null) ?: $this->textToHtml($validated['text']),
@@ -257,11 +272,63 @@ class ThreadActionController extends Controller
             ->implode("\n");
     }
 
+    /** @return array<int, string> */
+    private function recipientList(string $value): array
+    {
+        $recipients = collect(explode(',', $value))->map(fn (string $email): string => trim($email))->filter()->values();
+
+        if ($recipients->contains(fn (string $email): bool => filter_var($email, FILTER_VALIDATE_EMAIL) === false)) {
+            throw ValidationException::withMessages(['cc' => 'CC and BCC must contain valid comma-separated email addresses.']);
+        }
+
+        return $recipients->all();
+    }
+
+    /** @return array<int, string> */
+    private function replyAllRecipients(InboundEmail $inbound): array
+    {
+        return $this->recipientList(collect([
+            $inbound->headers['To'] ?? $inbound->headers['to'] ?? '',
+            $inbound->headers['Cc'] ?? $inbound->headers['cc'] ?? '',
+        ])->filter()->implode(','));
+    }
+
+    public function bulk(Request $request, string $projectSlug): RedirectResponse
+    {
+        $user = Auth::user();
+        abort_unless($user instanceof User, 403);
+        $project = $this->projectContext->projectFor($user, $projectSlug);
+        $validated = $request->validate([
+            'thread_ids' => ['required', 'array', 'min:1', 'max:50'],
+            'thread_ids.*' => ['string'],
+            'action' => ['required', 'in:archive,open,pending,close,assign,mark_read,mark_unread'],
+            'assigned_to_user_id' => ['nullable', 'integer'],
+        ]);
+
+        if ($validated['action'] === 'assign' && ($validated['assigned_to_user_id'] ?? null) !== null) {
+            abort_unless($project->workspace->users()->whereKey($validated['assigned_to_user_id'])->exists(), 422);
+        }
+
+        $threads = $project->threads()->whereIn('public_id', $validated['thread_ids'])->get();
+        abort_unless($threads->count() === count(array_unique($validated['thread_ids'])), 404);
+
+        foreach ($threads as $thread) {
+            match ($validated['action']) {
+                'archive' => $thread->forceFill(['archived_at' => now()])->save(),
+                'open', 'pending', 'close' => $thread->forceFill(['status' => $validated['action'] === 'close' ? 'closed' : $validated['action']])->save(),
+                'assign' => $thread->forceFill(['assigned_to_user_id' => $validated['assigned_to_user_id'] ?? null])->save(),
+                'mark_read', 'mark_unread' => $thread->userStates()->updateOrCreate(['user_id' => $user->id], ['read_at' => $validated['action'] === 'mark_read' ? now() : null]),
+            };
+            $this->recordEvent($thread, 'bulk_'.$validated['action']);
+        }
+
+        return back();
+    }
+
     public function read(Request $request, string $projectSlug, Thread $thread): RedirectResponse
     {
         $this->authorizeThread($thread);
-
-        $thread->forceFill(['read_at' => now()])->save();
+        $thread->userStates()->updateOrCreate(['user_id' => Auth::id()], ['read_at' => now(), 'last_viewed_at' => now()]);
 
         return back();
     }
@@ -270,7 +337,7 @@ class ThreadActionController extends Controller
     {
         $this->authorizeThread($thread);
 
-        $thread->forceFill(['read_at' => null])->save();
+        $thread->userStates()->updateOrCreate(['user_id' => Auth::id()], ['read_at' => null]);
 
         return back();
     }
@@ -280,6 +347,7 @@ class ThreadActionController extends Controller
         $this->authorizeThread($thread);
 
         $thread->forceFill(['archived_at' => now()])->save();
+        $this->recordEvent($thread, 'archived');
 
         return back();
     }
@@ -289,6 +357,7 @@ class ThreadActionController extends Controller
         $this->authorizeThread($thread);
 
         $thread->forceFill(['archived_at' => null])->save();
+        $this->recordEvent($thread, 'restored');
 
         return back();
     }
@@ -312,6 +381,7 @@ class ThreadActionController extends Controller
         };
 
         $thread->forceFill(['snoozed_until' => $until, 'read_at' => $thread->read_at ?? now()])->save();
+        $this->recordEvent($thread, 'snoozed', ['until' => $until->toIso8601String()]);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => 'Snoozed until '.$until->format('D, M j g:ia').'.']);
 
@@ -323,6 +393,29 @@ class ThreadActionController extends Controller
         $this->authorizeThread($thread);
 
         $thread->forceFill(['snoozed_until' => null])->save();
+        $this->recordEvent($thread, 'unsnoozed');
+
+        return back();
+    }
+
+    public function updateWorkflow(Request $request, string $projectSlug, Thread $thread): RedirectResponse
+    {
+        $project = $this->authorizeThread($thread);
+        $validated = $request->validate([
+            'status' => ['sometimes', 'in:open,pending,closed'],
+            'priority' => ['sometimes', 'in:low,normal,high,urgent'],
+            'assigned_to_user_id' => ['nullable', 'integer'],
+            'tags' => ['sometimes', 'array', 'max:10'],
+            'tags.*' => ['string', 'max:32'],
+        ]);
+
+        if (array_key_exists('assigned_to_user_id', $validated) && $validated['assigned_to_user_id'] !== null) {
+            abort_unless($project->workspace->users()->whereKey($validated['assigned_to_user_id'])->exists(), 422);
+        }
+
+        $before = $thread->only(['status', 'priority', 'assigned_to_user_id', 'tags']);
+        $thread->forceFill($validated)->save();
+        $this->recordEvent($thread, 'workflow_updated', ['before' => $before, 'after' => $thread->only(array_keys($validated))]);
 
         return back();
     }
@@ -360,5 +453,11 @@ class ThreadActionController extends Controller
         abort_unless($thread->project_id === $project->id, 404);
 
         return $project;
+    }
+
+    /** @param array<string, mixed> $metadata */
+    private function recordEvent(Thread $thread, string $type, array $metadata = []): void
+    {
+        $thread->events()->create(['user_id' => Auth::id(), 'type' => $type, 'metadata' => $metadata]);
     }
 }

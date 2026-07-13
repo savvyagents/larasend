@@ -6,6 +6,8 @@ import {
     ArchiveRestore,
     ArrowLeft,
     AtSign,
+    Bell,
+    CheckSquare,
     Forward,
     Inbox as InboxIcon,
     Mail,
@@ -16,13 +18,17 @@ import {
     Reply,
     Search,
     Send,
+    SlidersHorizontal,
     StickyNote,
+    Tag,
+    History,
     X,
 } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GlobalRail from '@/components/GlobalRail.vue';
 import RichTextEditor from '@/components/RichTextEditor.vue';
 import { Toaster } from '@/components/ui/sonner';
+import { inbox as inboxRoute } from '@/routes/projects';
 
 type ThreadRow = {
     public_id: string;
@@ -37,6 +43,10 @@ type ThreadRow = {
     snoozed_until_human: string | null;
     last_activity_at: string | null;
     last_activity_human: string | null;
+    status: 'open' | 'pending' | 'closed';
+    priority: 'low' | 'normal' | 'high' | 'urgent';
+    tags: string[];
+    assigned_to: { id: number; name: string } | null;
 };
 
 type Message = {
@@ -54,6 +64,8 @@ type Message = {
         size: number;
     }[];
     status: string | null;
+    status_detail?: string | null;
+    can_retry?: boolean;
     at: string | null;
     at_human: string | null;
 };
@@ -74,28 +86,59 @@ const props = defineProps<{
         href: string;
     }[];
     canSend: boolean;
+    teamMembers: { id: number; name: string; email: string }[];
+    templates: {
+        id: number;
+        name: string;
+        subject: string;
+        html: string | null;
+        text: string | null;
+    }[];
     mailbox: string;
     address: string | null;
-    filters: { q: string };
+    filters: { q: string; assigned: string };
     addresses: { address: string; count: number }[];
     counts: {
         inbox: number;
         unread: number;
         snoozed: number;
         archived: number;
+        closed: number;
     };
     threads: ThreadRow[];
+    pagination: { page: number; has_more: boolean };
     selectedThread:
-        | (ThreadRow & { messages: Message[]; reply_from: string | null })
+        | (ThreadRow & {
+              messages: Message[];
+              reply_from: string | null;
+              active_viewers: { id: number; name: string }[];
+              activity: {
+                  id: number;
+                  type: string;
+                  actor: string;
+                  metadata: Record<string, unknown>;
+                  at_human: string | null;
+              }[];
+          })
         | null;
 }>();
+
+const isDarkMode = ref(false);
+const isThemeReady = ref(false);
+let themeObserver: MutationObserver | null = null;
 
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const mobileThreadOpen = ref(false);
+const showFilters = ref(false);
+const bulkMode = ref(false);
+const selectedThreadIds = ref<string[]>([]);
+const showActivity = ref(false);
+const tagInput = ref('');
+const notificationsEnabled = ref(false);
 let searchTimer: ReturnType<typeof window.setTimeout> | null = null;
 
-const inboxPath = computed(() => `${props.project.path}/inbox`);
+const inboxPath = computed(() => inboxRoute.url(props.project.slug));
 
 const mailboxes = computed(() => [
     {
@@ -117,12 +160,17 @@ const mailboxes = computed(() => [
         icon: Archive,
         count: null,
     },
+    { key: 'closed', label: 'Closed', icon: ArchiveRestore, count: null },
 ]);
 
 const pageTitle = computed(() =>
     props.counts.unread
         ? `(${props.counts.unread}) Inbox · ${props.project.name}`
         : `Inbox · ${props.project.name}`,
+);
+
+const hasFilters = computed(() =>
+    Boolean(props.filters.assigned || props.address),
 );
 
 function visitInbox(params: Record<string, string | null>): void {
@@ -135,6 +183,7 @@ function visitInbox(params: Record<string, string | null>): void {
         mailbox: props.mailbox,
         address: props.address,
         q: searchQuery.value,
+        assigned: props.filters.assigned,
         thread: props.selectedThread?.public_id ?? null,
         ...params,
     };
@@ -153,12 +202,34 @@ function visitInbox(params: Record<string, string | null>): void {
 }
 
 function openMailbox(key: string): void {
-    visitInbox({ mailbox: key, thread: null });
+    visitInbox({ mailbox: key, address: null, thread: null });
 }
 
 function filterAddress(address: string): void {
+    setAddressFilter(props.address === address ? null : address);
+}
+
+function filterAssignment(assigned: string): void {
+    setAssignmentFilter(props.filters.assigned === assigned ? null : assigned);
+}
+
+function setAssignmentFilter(assigned: string | null): void {
+    visitInbox({ assigned, thread: null });
+}
+
+function setAddressFilter(address: string | null): void {
     visitInbox({
-        address: props.address === address ? null : address,
+        mailbox: address ? 'all' : 'inbox',
+        address,
+        thread: null,
+    });
+}
+
+function clearFilters(): void {
+    visitInbox({
+        mailbox: props.address ? 'inbox' : props.mailbox,
+        address: null,
+        assigned: null,
         thread: null,
     });
 }
@@ -187,6 +258,125 @@ function threadAction(action: string): void {
         { preserveState: false, preserveScroll: true, showProgress: false },
     );
 }
+
+function updateWorkflow(
+    data: Record<string, string | number | string[] | null>,
+): void {
+    if (!props.selectedThread) {
+        return;
+    }
+
+    router.patch(
+        `${props.project.path}/threads/${props.selectedThread.public_id}/workflow`,
+        data,
+        { preserveScroll: true, showProgress: false },
+    );
+}
+
+function toggleThreadSelection(publicId: string): void {
+    selectedThreadIds.value = selectedThreadIds.value.includes(publicId)
+        ? selectedThreadIds.value.filter((id) => id !== publicId)
+        : [...selectedThreadIds.value, publicId];
+}
+
+function bulkAction(
+    action: string,
+    assignedToUserId: number | null = null,
+): void {
+    if (!selectedThreadIds.value.length) {
+        return;
+    }
+
+    router.post(
+        `${props.project.path}/inbox/bulk`,
+        {
+            thread_ids: selectedThreadIds.value,
+            action,
+            assigned_to_user_id: assignedToUserId,
+        },
+        {
+            preserveScroll: true,
+            onSuccess: () => {
+                selectedThreadIds.value = [];
+                bulkMode.value = false;
+            },
+        },
+    );
+}
+
+function addTag(): void {
+    const tag = tagInput.value.trim().toLowerCase();
+
+    if (
+        !props.selectedThread ||
+        !tag ||
+        props.selectedThread.tags.includes(tag)
+    ) {
+        return;
+    }
+
+    updateWorkflow({ tags: [...props.selectedThread.tags, tag] });
+    tagInput.value = '';
+}
+
+function removeTag(tag: string): void {
+    if (!props.selectedThread) {
+        return;
+    }
+
+    updateWorkflow({
+        tags: props.selectedThread.tags.filter((item) => item !== tag),
+    });
+}
+
+async function toggleNotifications(): Promise<void> {
+    if (!('Notification' in window)) {
+        return;
+    }
+
+    const permission =
+        Notification.permission === 'granted'
+            ? 'granted'
+            : await Notification.requestPermission();
+    notificationsEnabled.value =
+        permission === 'granted' ? !notificationsEnabled.value : false;
+    localStorage.setItem(
+        'larasend:inbox-notifications',
+        notificationsEnabled.value ? '1' : '0',
+    );
+}
+
+function retryMessage(messageId: string): void {
+    router.post(
+        `${props.project.path}/emails/${messageId}/resend`,
+        {},
+        { preserveScroll: true },
+    );
+}
+
+const emptyMessage = computed(() => {
+    if (searchQuery.value) {
+        return 'No conversations match your search.';
+    }
+
+    if (props.address) {
+        return `No conversations for ${props.address}.`;
+    }
+
+    if (props.mailbox === 'unread') {
+        return 'You are caught up. There are no unread conversations.';
+    }
+
+    if (props.mailbox === 'snoozed') {
+        return 'No conversations are snoozed.';
+    }
+
+    if (props.mailbox === 'archived') {
+        return 'No archived conversations.';
+    }
+
+    return 'Mail sent to your receiving addresses lands here.';
+});
 
 const selectedIndex = computed(() =>
     props.threads.findIndex(
@@ -266,20 +456,62 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
+    isDarkMode.value = document.documentElement.classList.contains('dark');
+    isThemeReady.value = true;
+    themeObserver = new MutationObserver(() => {
+        isDarkMode.value = document.documentElement.classList.contains('dark');
+    });
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class'],
+    });
     mobileThreadOpen.value = new URLSearchParams(window.location.search).has(
         'thread',
     );
     window.addEventListener('keydown', onKeydown);
+    notificationsEnabled.value =
+        localStorage.getItem('larasend:inbox-notifications') === '1';
 });
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+    themeObserver?.disconnect();
+    window.removeEventListener('keydown', onKeydown);
+});
 
 usePoll(
     10000,
-    { only: ['threads', 'counts'], showProgress: false },
+    {
+        only: ['threads', 'counts', 'addresses', 'selectedThread'],
+        showProgress: false,
+    },
     { autoStart: true },
 );
 
-const replyForm = useForm({ text: '', html: '', attachments: [] as File[] });
+let previousUnreadCount = props.counts.unread;
+watch(
+    () => props.counts.unread,
+    (count) => {
+        if (
+            notificationsEnabled.value &&
+            count > previousUnreadCount &&
+            Notification.permission === 'granted'
+        ) {
+            new Notification('New Larasend conversation', {
+                body: `${count} unread conversations in ${props.project.name}`,
+            });
+        }
+
+        previousUnreadCount = count;
+    },
+);
+
+const replyForm = useForm({
+    text: '',
+    html: '',
+    reply_all: false,
+    cc: '',
+    bcc: '',
+    attachments: [] as File[],
+});
 const replyEditor = ref<InstanceType<typeof RichTextEditor> | null>(null);
 
 function sendReply(): void {
@@ -315,6 +547,8 @@ const showCompose = ref(false);
 const composeForm = useForm({
     from: '',
     to: '',
+    cc: '',
+    bcc: '',
     subject: '',
     text: '',
     html: '',
@@ -329,6 +563,20 @@ function sendCompose(): void {
             localStorage.removeItem(draftKey('compose'));
         },
     });
+}
+
+function applyTemplate(templateId: string): void {
+    const template = props.templates.find(
+        (item) => item.id === Number(templateId),
+    );
+
+    if (!template) {
+        return;
+    }
+
+    composeForm.subject = template.subject;
+    composeForm.html = template.html ?? '';
+    composeForm.text = template.text ?? '';
 }
 
 const showForward = ref(false);
@@ -497,17 +745,30 @@ watch(
 // Message HTML renders inside a sandboxed iframe (no scripts). The wrapper
 // document gives foreign markup native typography; the load handler sizes
 // the frame to its content so short messages stay short.
-function messageDocument(html: string): string {
-    return `<!doctype html><html><head><meta charset="utf-8"><style>
-body{margin:0;padding:1px;font:13px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#27272a;word-break:break-word;overflow-wrap:anywhere}
+function messageDocument(html: string, dark: boolean): string {
+    const safeHtml = html
+        .replace(
+            /<img\b[^>]*>/gi,
+            '<span style="color:#71717a">[remote image blocked]</span>',
+        )
+        .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ');
+
+    const foreground = dark ? '#e4e4e7' : '#27272a';
+    const muted = dark ? '#a1a1aa' : '#71717a';
+    const link = dark ? '#5eead4' : '#0d9488';
+
+    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: cid:"><style>
+html{color-scheme:${dark ? 'dark' : 'light'};background:transparent}
+body{margin:0;padding:1px;background:transparent;font:13px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:${foreground};word-break:break-word;overflow-wrap:anywhere}
+${dark ? `body :where(p,div,span,td,th,li,pre,code,strong,em){color:${foreground}!important}` : ''}
 img{max-width:100%;height:auto}
 p{margin:0 0 .6em}p:last-child{margin-bottom:0}
 ul,ol{margin:0 0 .6em;padding-left:1.4em}
-blockquote{margin:0 0 .6em;padding-left:.8em;border-left:2px solid #99f6e4;color:#71717a}
+blockquote{margin:0 0 .6em;padding-left:.8em;border-left:2px solid #99f6e4;color:${muted}}
 pre{white-space:pre-wrap;font:12px/1.6 ui-monospace,monospace}
-a{color:#0d9488}
+a{color:${link}!important}
 table{max-width:100%}
-</style></head><body>${html}</body></html>`;
+</style></head><body>${safeHtml}</body></html>`;
 }
 
 function fitMessageFrame(event: Event): void {
@@ -590,13 +851,34 @@ function participantSummary(thread: ThreadRow): string {
                 >
             </div>
             <button
+                type="button"
+                class="ml-auto grid size-9 place-items-center rounded-lg border border-zinc-200 text-zinc-500 xl:hidden dark:border-[#1d2125]"
+                aria-label="Mailbox filters"
+                @click="showFilters = true"
+            >
+                <SlidersHorizontal class="size-4" />
+            </button>
+            <button
                 v-if="canSend"
                 type="button"
-                class="ml-auto inline-flex h-9 items-center gap-2 rounded-lg bg-teal-300 px-3 text-[13px] font-bold text-zinc-950 transition hover:brightness-105"
+                class="inline-flex h-9 items-center gap-2 rounded-lg bg-teal-300 px-3 text-[13px] font-bold text-zinc-950 transition hover:brightness-105 xl:ml-auto"
                 @click="showCompose = true"
             >
                 <PenSquare class="size-3.5" />
                 Compose
+            </button>
+            <button
+                type="button"
+                class="grid size-8 place-items-center rounded-md border border-zinc-200 text-zinc-500 dark:border-[#1d2125]"
+                :class="notificationsEnabled ? 'text-teal-500' : ''"
+                :title="
+                    notificationsEnabled
+                        ? 'Disable new-mail notifications'
+                        : 'Enable new-mail notifications'
+                "
+                @click="toggleNotifications"
+            >
+                <Bell class="size-3.5" />
             </button>
             <button
                 type="button"
@@ -615,61 +897,174 @@ function participantSummary(thread: ThreadRow): string {
             <aside
                 class="hidden min-h-0 content-start gap-1 overflow-auto border-r border-zinc-200 p-3 xl:grid dark:border-[#1d2125]"
             >
-                <p
-                    class="px-2 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
-                >
-                    Mailboxes
-                </p>
-                <button
-                    v-for="box in mailboxes"
-                    :key="box.key"
-                    type="button"
-                    class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left font-medium transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
-                    :class="
-                        mailbox === box.key && !address
-                            ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
-                            : 'text-zinc-600 dark:text-zinc-400'
-                    "
-                    @click="openMailbox(box.key)"
-                >
-                    <component :is="box.icon" class="size-3.5 shrink-0" />
-                    <span class="flex-1">{{ box.label }}</span>
-                    <span
-                        v-if="box.count"
-                        class="rounded-full bg-teal-300 px-1.5 font-mono text-[10.5px] font-semibold text-zinc-950"
+                <section class="grid gap-0.5">
+                    <p
+                        class="px-2 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
                     >
-                        {{ box.count }}
-                    </span>
-                </button>
+                        Mailboxes
+                    </p>
+                    <button
+                        v-for="box in mailboxes"
+                        :key="box.key"
+                        type="button"
+                        class="flex h-7 items-center gap-2.5 rounded-md px-2 text-left font-medium transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
+                        :class="
+                            mailbox === box.key && !address
+                                ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
+                                : 'text-zinc-600 dark:text-zinc-400'
+                        "
+                        @click="openMailbox(box.key)"
+                    >
+                        <component :is="box.icon" class="size-3.5 shrink-0" />
+                        <span class="flex-1">{{ box.label }}</span>
+                        <span
+                            v-if="box.count"
+                            class="rounded-full bg-teal-300 px-1.5 font-mono text-[10.5px] font-semibold text-zinc-950"
+                        >
+                            {{ box.count }}
+                        </span>
+                    </button>
+                </section>
 
-                <p
-                    v-if="addresses.length"
-                    class="px-2 pt-4 pb-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                <section
+                    class="mt-4 border-t border-zinc-200 pt-4 dark:border-[#1d2125]"
                 >
-                    Addresses
-                </p>
-                <button
-                    v-for="entry in addresses"
-                    :key="entry.address"
-                    type="button"
-                    class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-zinc-100 dark:hover:bg-[#16191c]"
-                    :class="
-                        address === entry.address
-                            ? 'bg-teal-50 text-zinc-950 dark:bg-teal-400/10 dark:text-zinc-100'
-                            : 'text-zinc-600 dark:text-zinc-400'
-                    "
-                    @click="filterAddress(entry.address)"
-                >
-                    <AtSign class="size-3 shrink-0" />
-                    <span
-                        class="min-w-0 flex-1 truncate font-mono text-[11.5px]"
-                    >
-                        {{ entry.address.split('@')[0] }}
-                    </span>
-                    <span class="font-mono text-[10.5px] text-zinc-500">
-                        {{ entry.count }}
-                    </span>
-                </button>
+                    <div class="mb-2.5 flex items-center gap-2 px-1">
+                        <span
+                            class="grid size-6 place-items-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-[#16191c] dark:text-zinc-400"
+                        >
+                            <SlidersHorizontal class="size-3.5" />
+                        </span>
+                        <p
+                            class="text-[12.5px] font-semibold text-zinc-800 dark:text-zinc-200"
+                        >
+                            Filters
+                        </p>
+                        <button
+                            v-if="hasFilters"
+                            type="button"
+                            class="ml-auto rounded px-1 py-0.5 text-[10.5px] font-semibold text-teal-700 transition hover:bg-teal-50 dark:text-teal-300 dark:hover:bg-teal-400/10"
+                            @click="clearFilters"
+                        >
+                            Clear
+                        </button>
+                    </div>
+
+                    <div class="grid gap-3">
+                        <fieldset class="grid min-w-0 gap-1.5">
+                            <legend
+                                class="mb-1 text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
+                            >
+                                Assignee
+                            </legend>
+                            <div
+                                class="grid grid-cols-[0.65fr_0.8fr_1.25fr] gap-0.5 rounded-lg bg-zinc-100 p-0.5 ring-1 ring-zinc-200 dark:bg-[#111315] dark:ring-[#25292d]"
+                                role="radiogroup"
+                                aria-label="Assignee filter"
+                            >
+                                <button
+                                    v-for="entry in [
+                                        { key: null, label: 'All' },
+                                        { key: 'mine', label: 'Mine' },
+                                        {
+                                            key: 'unassigned',
+                                            label: 'Unassigned',
+                                        },
+                                    ]"
+                                    :key="entry.label"
+                                    type="button"
+                                    role="radio"
+                                    class="h-7 min-w-0 rounded-md px-1 text-[10.5px] font-semibold transition"
+                                    :class="
+                                        (filters.assigned || null) === entry.key
+                                            ? 'bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200 dark:bg-[#22262a] dark:text-zinc-100 dark:ring-[#30353a]'
+                                            : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-500 dark:hover:text-zinc-200'
+                                    "
+                                    :aria-checked="
+                                        (filters.assigned || null) === entry.key
+                                    "
+                                    @click="setAssignmentFilter(entry.key)"
+                                >
+                                    {{ entry.label }}
+                                </button>
+                            </div>
+                        </fieldset>
+
+                        <fieldset
+                            v-if="addresses.length"
+                            class="grid min-w-0 gap-1.5"
+                        >
+                            <legend
+                                class="mb-1 text-[10.5px] font-medium text-zinc-500 dark:text-zinc-400"
+                            >
+                                Receiving address
+                            </legend>
+                            <div
+                                class="grid divide-y divide-zinc-200 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:divide-[#25292d] dark:border-[#25292d] dark:bg-[#101111]"
+                                role="radiogroup"
+                                aria-label="Receiving address filter"
+                            >
+                                <button
+                                    type="button"
+                                    role="radio"
+                                    class="flex h-9 min-w-0 items-center gap-2 px-2 text-left transition"
+                                    :class="
+                                        address === null
+                                            ? 'bg-teal-50 text-zinc-900 dark:bg-teal-400/10 dark:text-zinc-100'
+                                            : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-[#16191c]'
+                                    "
+                                    :aria-checked="address === null"
+                                    @click="setAddressFilter(null)"
+                                >
+                                    <span
+                                        class="size-1.5 shrink-0 rounded-full"
+                                        :class="
+                                            address === null
+                                                ? 'bg-teal-500'
+                                                : 'bg-zinc-300 dark:bg-zinc-700'
+                                        "
+                                    />
+                                    <span
+                                        class="min-w-0 flex-1 truncate text-[11.5px] font-medium"
+                                    >
+                                        All addresses
+                                    </span>
+                                </button>
+                                <button
+                                    v-for="entry in addresses"
+                                    :key="entry.address"
+                                    type="button"
+                                    role="radio"
+                                    class="flex h-10 min-w-0 items-center gap-2 px-2 text-left transition"
+                                    :class="
+                                        address === entry.address
+                                            ? 'bg-teal-50 text-zinc-900 dark:bg-teal-400/10 dark:text-zinc-100'
+                                            : 'text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-[#16191c]'
+                                    "
+                                    :aria-checked="address === entry.address"
+                                    @click="setAddressFilter(entry.address)"
+                                >
+                                    <span
+                                        class="grid size-5 shrink-0 place-items-center rounded-md bg-zinc-100 dark:bg-[#1b1e21]"
+                                    >
+                                        <AtSign class="size-3" />
+                                    </span>
+                                    <span
+                                        class="min-w-0 flex-1 truncate font-mono text-[10.5px]"
+                                        :title="entry.address"
+                                    >
+                                        {{ entry.address }}
+                                    </span>
+                                    <span
+                                        class="grid min-w-4 shrink-0 place-items-center rounded-full bg-zinc-100 px-1 font-mono text-[9.5px] text-zinc-500 dark:bg-[#1b1e21] dark:text-zinc-400"
+                                    >
+                                        {{ entry.count }}
+                                    </span>
+                                </button>
+                            </div>
+                        </fieldset>
+                    </div>
+                </section>
             </aside>
 
             <section
@@ -681,19 +1076,94 @@ function participantSummary(thread: ThreadRow): string {
                 "
             >
                 <div
-                    class="border-b border-zinc-200 p-2.5 dark:border-[#1d2125]"
+                    class="grid gap-2 border-b border-zinc-200 p-2.5 dark:border-[#1d2125]"
                 >
-                    <div class="relative">
-                        <Search
-                            class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-zinc-400"
-                        />
-                        <input
-                            ref="searchInput"
-                            v-model="searchQuery"
-                            placeholder="Search conversations"
-                            class="h-8 w-full rounded-md border border-zinc-200 bg-white pl-8 text-[12.5px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
-                            @input="onSearchInput"
-                        />
+                    <div class="flex gap-2">
+                        <div class="relative min-w-0 flex-1">
+                            <Search
+                                class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-zinc-400"
+                            />
+                            <input
+                                ref="searchInput"
+                                v-model="searchQuery"
+                                placeholder="Search conversations"
+                                class="h-8 w-full rounded-md border border-zinc-200 bg-white pl-8 text-[12.5px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
+                                @input="onSearchInput"
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            class="grid size-8 place-items-center rounded-md border border-zinc-200 text-zinc-500 dark:border-[#1d2125]"
+                            :class="
+                                bulkMode
+                                    ? 'bg-teal-50 text-teal-700 dark:bg-teal-400/10 dark:text-teal-300'
+                                    : ''
+                            "
+                            title="Select conversations"
+                            @click="
+                                bulkMode = !bulkMode;
+                                selectedThreadIds = [];
+                            "
+                        >
+                            <CheckSquare class="size-3.5" />
+                        </button>
+                    </div>
+                    <div
+                        v-if="bulkMode"
+                        class="flex flex-wrap items-center gap-1.5 text-xs"
+                    >
+                        <span class="mr-auto font-semibold"
+                            >{{ selectedThreadIds.length }} selected</span
+                        >
+                        <button
+                            type="button"
+                            class="rounded border border-zinc-200 px-2 py-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @click="bulkAction('mark_read')"
+                        >
+                            Read
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded border border-zinc-200 px-2 py-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @click="bulkAction('archive')"
+                        >
+                            Archive
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded border border-zinc-200 px-2 py-1 dark:border-[#1d2125]"
+                            :disabled="!selectedThreadIds.length"
+                            @click="bulkAction('close')"
+                        >
+                            Close
+                        </button>
+                        <select
+                            class="h-7 rounded-md border border-zinc-200 bg-white px-2 text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
+                            :disabled="!selectedThreadIds.length"
+                            @change="
+                                bulkAction(
+                                    'assign',
+                                    ($event.target as HTMLSelectElement).value
+                                        ? Number(
+                                              (
+                                                  $event.target as HTMLSelectElement
+                                              ).value,
+                                          )
+                                        : null,
+                                )
+                            "
+                        >
+                            <option value="">Assign…</option>
+                            <option
+                                v-for="member in teamMembers"
+                                :key="member.id"
+                                :value="member.id"
+                            >
+                                {{ member.name }}
+                            </option>
+                        </select>
                     </div>
                 </div>
                 <div class="min-h-0 overflow-auto">
@@ -703,7 +1173,7 @@ function participantSummary(thread: ThreadRow): string {
                     >
                         <span class="font-semibold">No conversations</span>
                         <span class="text-xs">
-                            Mail sent to your receiving addresses lands here.
+                            {{ emptyMessage }}
                         </span>
                     </div>
                     <button
@@ -716,9 +1186,28 @@ function participantSummary(thread: ThreadRow): string {
                                 ? 'bg-teal-50/70 dark:bg-teal-400/10'
                                 : ''
                         "
-                        @click="openThread(thread.public_id)"
+                        @click="
+                            bulkMode
+                                ? toggleThreadSelection(thread.public_id)
+                                : openThread(thread.public_id)
+                        "
                     >
                         <div class="flex items-baseline gap-2">
+                            <span
+                                v-if="bulkMode"
+                                class="grid size-4 shrink-0 place-items-center rounded border border-zinc-300 text-[10px]"
+                                :class="
+                                    selectedThreadIds.includes(thread.public_id)
+                                        ? 'border-teal-400 bg-teal-400 text-zinc-950'
+                                        : ''
+                                "
+                            >
+                                {{
+                                    selectedThreadIds.includes(thread.public_id)
+                                        ? '✓'
+                                        : ''
+                                }}
+                            </span>
                             <span
                                 v-if="thread.unread"
                                 class="size-1.5 shrink-0 self-center rounded-full bg-teal-400"
@@ -773,6 +1262,37 @@ function participantSummary(thread: ThreadRow): string {
                             </span>
                         </div>
                     </button>
+                    <div
+                        v-if="pagination.page > 1 || pagination.has_more"
+                        class="flex gap-2 p-3"
+                    >
+                        <button
+                            v-if="pagination.page > 1"
+                            type="button"
+                            class="flex-1 rounded-md border border-zinc-200 py-2 text-xs font-semibold dark:border-[#1d2125]"
+                            @click="
+                                visitInbox({
+                                    page: String(pagination.page - 1),
+                                    thread: null,
+                                })
+                            "
+                        >
+                            Previous
+                        </button>
+                        <button
+                            v-if="pagination.has_more"
+                            type="button"
+                            class="flex-1 rounded-md border border-zinc-200 py-2 text-xs font-semibold dark:border-[#1d2125]"
+                            @click="
+                                visitInbox({
+                                    page: String(pagination.page + 1),
+                                    thread: null,
+                                })
+                            "
+                        >
+                            Next 50
+                        </button>
+                    </div>
                 </div>
             </section>
 
@@ -782,7 +1302,7 @@ function participantSummary(thread: ThreadRow): string {
                 :class="mobileThreadOpen ? 'grid' : 'hidden'"
             >
                 <div
-                    class="flex items-center gap-2 border-b border-zinc-200 px-3 py-3 sm:gap-3 sm:px-5 dark:border-[#1d2125]"
+                    class="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-3 py-3 sm:gap-3 sm:px-5 dark:border-[#1d2125]"
                 >
                     <button
                         type="button"
@@ -792,14 +1312,117 @@ function participantSummary(thread: ThreadRow): string {
                     >
                         <ArrowLeft class="size-4" />
                     </button>
-                    <div class="min-w-0 flex-1">
+                    <div class="min-w-0 flex-1 md:basis-full 2xl:basis-auto">
                         <h1 class="truncate text-[15px] font-semibold">
                             {{ selectedThread.subject || '(no subject)' }}
                         </h1>
                         <p class="truncate font-mono text-[11px] text-zinc-500">
                             {{ selectedThread.participants.join(' · ') }}
                         </p>
+                        <div
+                            v-if="selectedThread.tags.length"
+                            class="mt-1 flex flex-wrap gap-1"
+                        >
+                            <button
+                                v-for="tag in selectedThread.tags"
+                                :key="tag"
+                                type="button"
+                                class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                                :title="`Remove ${tag}`"
+                                @click="removeTag(tag)"
+                            >
+                                #{{ tag }} ×
+                            </button>
+                        </div>
+                        <p
+                            v-if="selectedThread.active_viewers.length"
+                            class="mt-1 truncate text-[10.5px] font-semibold text-amber-500"
+                        >
+                            {{
+                                selectedThread.active_viewers
+                                    .map((viewer) => viewer.name)
+                                    .join(', ')
+                            }}
+                            viewing now
+                        </p>
                     </div>
+                    <select
+                        :value="selectedThread.status"
+                        class="hidden h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 lg:block dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
+                        aria-label="Conversation status"
+                        @change="
+                            updateWorkflow({
+                                status: ($event.target as HTMLSelectElement)
+                                    .value,
+                            })
+                        "
+                    >
+                        <option value="open">Open</option>
+                        <option value="pending">Pending</option>
+                        <option value="closed">Closed</option>
+                    </select>
+                    <form
+                        class="hidden items-center gap-1 2xl:flex"
+                        @submit.prevent="addTag"
+                    >
+                        <Tag class="size-3.5 text-zinc-400" />
+                        <input
+                            v-model="tagInput"
+                            maxlength="32"
+                            placeholder="tag"
+                            class="h-8 w-20 rounded-md border border-zinc-200 bg-transparent px-2 text-xs dark:border-[#1d2125]"
+                        />
+                    </form>
+                    <button
+                        type="button"
+                        class="grid size-8 place-items-center rounded-md border border-zinc-200 text-zinc-500 dark:border-[#1d2125]"
+                        title="Activity history"
+                        @click="showActivity = true"
+                    >
+                        <History class="size-3.5" />
+                    </button>
+                    <select
+                        :value="selectedThread.assigned_to?.id ?? ''"
+                        class="hidden h-8 max-w-36 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 lg:block dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
+                        aria-label="Assign conversation"
+                        @change="
+                            updateWorkflow({
+                                assigned_to_user_id: (
+                                    $event.target as HTMLSelectElement
+                                ).value
+                                    ? Number(
+                                          ($event.target as HTMLSelectElement)
+                                              .value,
+                                      )
+                                    : null,
+                            })
+                        "
+                    >
+                        <option value="">Unassigned</option>
+                        <option
+                            v-for="member in teamMembers"
+                            :key="member.id"
+                            :value="member.id"
+                        >
+                            {{ member.name }}
+                        </option>
+                    </select>
+                    <select
+                        :value="selectedThread.priority"
+                        class="hidden h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 lg:block dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
+                        aria-label="Conversation priority"
+                        @change="
+                            updateWorkflow({
+                                priority: ($event.target as HTMLSelectElement)
+                                    .value,
+                            })
+                        "
+                    >
+                        <option value="low">Low</option>
+                        <option value="normal">Normal</option>
+                        <option value="high">High</option>
+                        <option value="urgent">Urgent</option>
+                    </select>
                     <button
                         type="button"
                         class="hidden items-center gap-1.5 rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-100 2xl:inline-flex dark:border-[#1d2125] dark:text-zinc-300 dark:hover:bg-[#16191c]"
@@ -1021,6 +1644,20 @@ function participantSummary(thread: ThreadRow): string {
                                 {{ message.at_human }}
                             </span>
                         </div>
+                        <p
+                            v-if="message.status_detail"
+                            class="rounded-md bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-300"
+                        >
+                            {{ message.status_detail }}
+                        </p>
+                        <button
+                            v-if="message.can_retry"
+                            type="button"
+                            class="w-fit rounded-md border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 dark:border-red-500/30 dark:text-red-300"
+                            @click="retryMessage(message.id)"
+                        >
+                            Retry send
+                        </button>
                         <div
                             v-if="message.direction !== 'note'"
                             class="font-mono text-[10.5px] text-zinc-500"
@@ -1028,10 +1665,10 @@ function participantSummary(thread: ThreadRow): string {
                             to {{ message.to }}
                         </div>
                         <iframe
-                            v-if="message.html"
-                            :srcdoc="messageDocument(message.html)"
-                            sandbox="allow-same-origin"
-                            class="h-6 w-full rounded-md bg-white"
+                            v-if="message.html && isThemeReady"
+                            :srcdoc="messageDocument(message.html, isDarkMode)"
+                            sandbox="allow-same-origin allow-popups"
+                            class="h-6 w-full rounded-md bg-white dark:bg-[#101111]"
                             :title="`Message from ${message.from_email}`"
                             @load="fitMessageFrame"
                         />
@@ -1044,17 +1681,31 @@ function participantSummary(thread: ThreadRow): string {
                             v-if="message.attachments.length"
                             class="flex flex-wrap gap-2"
                         >
-                            <a
+                            <template v-if="message.direction === 'inbound'">
+                                <a
+                                    v-for="(
+                                        attachment, index
+                                    ) in message.attachments"
+                                    :key="attachment.filename ?? index"
+                                    :href="attachmentUrl(message.id, index)"
+                                    class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 transition hover:border-teal-300 hover:text-zinc-950 dark:border-[#1d2125] dark:text-zinc-400 dark:hover:text-zinc-100"
+                                >
+                                    <Paperclip class="size-3" />
+                                    {{ attachment.filename ?? 'attachment' }}
+                                </a>
+                            </template>
+                            <span
                                 v-for="(
                                     attachment, index
-                                ) in message.attachments"
-                                :key="attachment.filename ?? index"
-                                :href="attachmentUrl(message.id, index)"
-                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 transition hover:border-teal-300 hover:text-zinc-950 dark:border-[#1d2125] dark:text-zinc-400 dark:hover:text-zinc-100"
+                                ) in message.direction === 'outbound'
+                                    ? message.attachments
+                                    : []"
+                                :key="`outbound-${attachment.filename ?? index}`"
+                                class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 px-2 py-1 font-mono text-[11px] text-zinc-600 dark:border-[#1d2125] dark:text-zinc-400"
                             >
                                 <Paperclip class="size-3" />
                                 {{ attachment.filename ?? 'attachment' }}
-                            </a>
+                            </span>
                         </div>
                     </article>
                 </div>
@@ -1111,6 +1762,29 @@ function participantSummary(thread: ThreadRow): string {
                                 @update:text="replyForm.text = $event"
                                 @submit="sendReply"
                             />
+                            <div class="grid gap-2 sm:grid-cols-3">
+                                <label
+                                    class="flex items-center gap-2 text-xs text-zinc-500"
+                                >
+                                    <input
+                                        v-model="replyForm.reply_all"
+                                        type="checkbox"
+                                    />
+                                    Reply all
+                                </label>
+                                <input
+                                    v-model="replyForm.cc"
+                                    type="text"
+                                    placeholder="CC"
+                                    class="h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs dark:border-[#1d2125]"
+                                />
+                                <input
+                                    v-model="replyForm.bcc"
+                                    type="text"
+                                    placeholder="BCC"
+                                    class="h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs dark:border-[#1d2125]"
+                                />
+                            </div>
                             <div
                                 v-if="replyForm.attachments.length"
                                 class="flex flex-wrap gap-2"
@@ -1223,6 +1897,100 @@ function participantSummary(thread: ThreadRow): string {
         </div>
 
         <div
+            v-if="showFilters"
+            class="fixed inset-0 z-50 bg-zinc-950/45 xl:hidden"
+            @click.self="showFilters = false"
+        >
+            <aside
+                class="grid h-full w-72 content-start gap-1 overflow-y-auto bg-white p-4 shadow-2xl dark:bg-[#111315]"
+            >
+                <div class="mb-3 flex items-center">
+                    <h2 class="font-semibold">Mailbox filters</h2>
+                    <button
+                        type="button"
+                        class="ml-auto p-2"
+                        aria-label="Close filters"
+                        @click="showFilters = false"
+                    >
+                        <X class="size-4" />
+                    </button>
+                </div>
+                <button
+                    v-for="box in mailboxes"
+                    :key="box.key"
+                    type="button"
+                    class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left"
+                    :class="
+                        mailbox === box.key && !address
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : ''
+                    "
+                    @click="
+                        showFilters = false;
+                        openMailbox(box.key);
+                    "
+                >
+                    <component :is="box.icon" class="size-4" />
+                    <span class="flex-1">{{ box.label }}</span>
+                    <span v-if="box.count" class="font-mono text-xs">{{
+                        box.count
+                    }}</span>
+                </button>
+                <p
+                    class="mt-4 px-3 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                >
+                    Assignment
+                </p>
+                <button
+                    v-for="entry in [
+                        { key: 'mine', label: 'Mine' },
+                        { key: 'unassigned', label: 'Unassigned' },
+                    ]"
+                    :key="entry.key"
+                    type="button"
+                    class="min-h-10 rounded-lg px-3 text-left"
+                    :class="
+                        filters.assigned === entry.key
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : ''
+                    "
+                    @click="
+                        showFilters = false;
+                        filterAssignment(entry.key);
+                    "
+                >
+                    {{ entry.label }}
+                </button>
+                <p
+                    class="mt-4 px-3 font-mono text-[10px] tracking-widest text-zinc-500 uppercase"
+                >
+                    Addresses
+                </p>
+                <button
+                    v-for="entry in addresses"
+                    :key="entry.address"
+                    type="button"
+                    class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left"
+                    :class="
+                        address === entry.address
+                            ? 'bg-teal-50 dark:bg-teal-400/10'
+                            : ''
+                    "
+                    @click="
+                        showFilters = false;
+                        filterAddress(entry.address);
+                    "
+                >
+                    <AtSign class="size-4" />
+                    <span class="min-w-0 flex-1 truncate">{{
+                        entry.address
+                    }}</span>
+                    <span class="font-mono text-xs">{{ entry.count }}</span>
+                </button>
+            </aside>
+        </div>
+
+        <div
             v-if="showCompose"
             class="fixed inset-0 z-40 grid place-items-center bg-zinc-950/40 p-4 backdrop-blur-sm"
             @click.self="showCompose = false"
@@ -1242,12 +2010,28 @@ function participantSummary(thread: ThreadRow): string {
                     </button>
                 </div>
                 <label class="grid gap-1.5 text-sm">
+                    <span class="text-zinc-500">From</span>
+                    <select
+                        v-model="composeForm.from"
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
+                    >
+                        <option value="">Default sender</option>
+                        <option
+                            v-for="entry in addresses"
+                            :key="entry.address"
+                            :value="entry.address"
+                        >
+                            {{ entry.address }}
+                        </option>
+                    </select>
+                </label>
+                <label class="grid gap-1.5 text-sm">
                     <span class="text-zinc-500">To</span>
                     <input
                         v-model="composeForm.to"
-                        type="email"
+                        type="text"
                         required
-                        placeholder="person@example.com"
+                        placeholder="One or more comma-separated addresses"
                         class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
                     />
                     <span
@@ -1265,6 +2049,46 @@ function participantSummary(thread: ThreadRow): string {
                         class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#1d2125] dark:bg-[#101111]"
                     />
                 </label>
+                <label v-if="templates.length" class="grid gap-1.5 text-sm">
+                    <span class="text-zinc-500">Template</span>
+                    <select
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
+                        @change="
+                            applyTemplate(
+                                ($event.target as HTMLSelectElement).value,
+                            )
+                        "
+                    >
+                        <option value="">Start from scratch</option>
+                        <option
+                            v-for="template in templates"
+                            :key="template.id"
+                            :value="template.id"
+                        >
+                            {{ template.name }}
+                        </option>
+                    </select>
+                </label>
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <label class="grid gap-1.5 text-sm">
+                        <span class="text-zinc-500">CC</span>
+                        <input
+                            v-model="composeForm.cc"
+                            type="text"
+                            placeholder="Comma-separated addresses"
+                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        />
+                    </label>
+                    <label class="grid gap-1.5 text-sm">
+                        <span class="text-zinc-500">BCC</span>
+                        <input
+                            v-model="composeForm.bcc"
+                            type="text"
+                            placeholder="Comma-separated addresses"
+                            class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        />
+                    </label>
+                </div>
                 <div class="grid gap-1.5 text-sm">
                     <span class="text-zinc-500">Message</span>
                     <RichTextEditor
@@ -1394,6 +2218,95 @@ function participantSummary(thread: ThreadRow): string {
                 </div>
             </form>
         </div>
+    </div>
+    <div
+        v-if="showActivity && selectedThread"
+        class="fixed inset-0 z-50 grid place-items-center bg-zinc-950/45 p-4 backdrop-blur-sm"
+        @click.self="showActivity = false"
+    >
+        <section
+            class="grid max-h-[80vh] w-full max-w-lg grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-[#1d2125] dark:bg-[#111315]"
+        >
+            <div
+                class="flex items-center border-b border-zinc-200 p-4 dark:border-[#1d2125]"
+            >
+                <div>
+                    <h2 class="font-semibold">Conversation activity</h2>
+                    <p class="text-xs text-zinc-500">
+                        Assignment, status, snooze, and archive history
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    class="ml-auto p-2"
+                    aria-label="Close activity"
+                    @click="showActivity = false"
+                >
+                    <X class="size-4" />
+                </button>
+            </div>
+            <div class="overflow-y-auto p-4">
+                <form class="mb-4 flex gap-2" @submit.prevent="addTag">
+                    <div class="relative min-w-0 flex-1">
+                        <Tag
+                            class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-zinc-400"
+                        />
+                        <input
+                            v-model="tagInput"
+                            maxlength="32"
+                            placeholder="Add a conversation tag"
+                            class="h-9 w-full rounded-md border border-zinc-200 bg-transparent pr-3 pl-8 text-sm dark:border-[#1d2125]"
+                        />
+                    </div>
+                    <button
+                        type="submit"
+                        class="rounded-md bg-teal-300 px-3 text-xs font-bold text-zinc-950 disabled:opacity-50"
+                        :disabled="!tagInput.trim()"
+                    >
+                        Add tag
+                    </button>
+                </form>
+                <div
+                    v-if="selectedThread.tags.length"
+                    class="mb-4 flex flex-wrap gap-1.5"
+                >
+                    <button
+                        v-for="tag in selectedThread.tags"
+                        :key="tag"
+                        type="button"
+                        class="rounded bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800"
+                        @click="removeTag(tag)"
+                    >
+                        #{{ tag }} ×
+                    </button>
+                </div>
+                <p
+                    v-if="!selectedThread.activity.length"
+                    class="py-8 text-center text-sm text-zinc-500"
+                >
+                    No workflow activity yet.
+                </p>
+                <div
+                    v-for="event in selectedThread.activity"
+                    :key="event.id"
+                    class="flex gap-3 border-b border-zinc-100 py-3 last:border-0 dark:border-[#1d2125]"
+                >
+                    <span
+                        class="grid size-7 shrink-0 place-items-center rounded-full bg-zinc-100 font-mono text-[10px] dark:bg-zinc-800"
+                        >{{ event.actor.slice(0, 2).toUpperCase() }}</span
+                    >
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm">
+                            <strong>{{ event.actor }}</strong>
+                            {{ event.type.replaceAll('_', ' ') }}
+                        </p>
+                        <p class="font-mono text-[10.5px] text-zinc-500">
+                            {{ event.at_human }}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
     <div
         v-if="showShortcuts"

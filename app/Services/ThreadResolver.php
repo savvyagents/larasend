@@ -189,6 +189,11 @@ class ThreadResolver
             'read_at' => $direction === 'inbound' ? null : ($thread->read_at ?? now()),
             'archived_at' => $direction === 'inbound' ? null : $thread->archived_at,
             'snoozed_until' => $direction === 'inbound' ? null : $thread->snoozed_until,
+            'status' => $direction === 'inbound' ? 'open' : $thread->status,
         ])->save();
+
+        if ($direction === 'inbound') {
+            $thread->userStates()->update(['read_at' => null]);
+        }
     }
 }

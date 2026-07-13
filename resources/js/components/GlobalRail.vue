@@ -266,12 +266,10 @@ const mobileItems = computed(() => [
             </div>
         </div>
 
-        <nav class="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-            <section
-                v-for="group in navigationGroups"
-                :key="group.label"
-                class="mb-0.5 pt-1.5 first:pt-0 last:mb-0"
-            >
+        <nav
+            class="grid min-h-0 flex-1 content-start gap-5 overflow-y-auto px-3 py-3"
+        >
+            <section v-for="group in navigationGroups" :key="group.label">
                 <h2
                     class="mb-0.5 px-2 font-mono text-[9.5px] font-semibold tracking-[0.14em] text-zinc-400 uppercase dark:text-[#6c7177]"
                 >
