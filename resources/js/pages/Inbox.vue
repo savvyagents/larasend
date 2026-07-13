@@ -974,7 +974,7 @@ function participantSummary(thread: ThreadRow): string {
                             </span>
                             <select
                                 :value="filters.assigned"
-                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#262a2e] dark:bg-[#16191c] dark:text-zinc-200"
+                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-[11.5px] font-medium text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                                 @change="setAssignmentFilter"
                             >
                                 <option value="">Any assignee</option>
@@ -994,7 +994,7 @@ function participantSummary(thread: ThreadRow): string {
                             </span>
                             <select
                                 :value="address ?? ''"
-                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 font-mono text-[10.5px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#262a2e] dark:bg-[#16191c] dark:text-zinc-200"
+                                class="h-8 min-w-0 rounded-md border border-zinc-200 bg-white px-2 font-mono text-[10.5px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                                 @change="setAddressFilter"
                             >
                                 <option value="">All addresses</option>
@@ -1084,7 +1084,7 @@ function participantSummary(thread: ThreadRow): string {
                             Close
                         </button>
                         <select
-                            class="h-7 rounded border border-zinc-200 bg-transparent px-1 dark:border-[#1d2125]"
+                            class="h-7 rounded-md border border-zinc-200 bg-white px-2 text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                             :disabled="!selectedThreadIds.length"
                             @change="
                                 bulkAction(
@@ -1292,7 +1292,7 @@ function participantSummary(thread: ThreadRow): string {
                     </div>
                     <select
                         :value="selectedThread.status"
-                        class="hidden h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs font-semibold lg:block dark:border-[#1d2125]"
+                        class="hidden h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 lg:block dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                         aria-label="Conversation status"
                         @change="
                             updateWorkflow({
@@ -1327,7 +1327,7 @@ function participantSummary(thread: ThreadRow): string {
                     </button>
                     <select
                         :value="selectedThread.assigned_to?.id ?? ''"
-                        class="hidden h-8 max-w-36 rounded-md border border-zinc-200 bg-transparent px-2 text-xs lg:block dark:border-[#1d2125]"
+                        class="hidden h-8 max-w-36 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 lg:block dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                         aria-label="Assign conversation"
                         @change="
                             updateWorkflow({
@@ -1353,7 +1353,7 @@ function participantSummary(thread: ThreadRow): string {
                     </select>
                     <select
                         :value="selectedThread.priority"
-                        class="hidden h-8 rounded-md border border-zinc-200 bg-transparent px-2 text-xs lg:block dark:border-[#1d2125]"
+                        class="hidden h-8 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 lg:block dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                         aria-label="Conversation priority"
                         @change="
                             updateWorkflow({
@@ -1957,7 +1957,7 @@ function participantSummary(thread: ThreadRow): string {
                     <span class="text-zinc-500">From</span>
                     <select
                         v-model="composeForm.from"
-                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                     >
                         <option value="">Default sender</option>
                         <option
@@ -1996,7 +1996,7 @@ function participantSummary(thread: ThreadRow): string {
                 <label v-if="templates.length" class="grid gap-1.5 text-sm">
                     <span class="text-zinc-500">Template</span>
                     <select
-                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] dark:border-[#1d2125] dark:bg-[#101111]"
+                        class="h-9 rounded-md border border-zinc-200 bg-white px-2.5 text-[13px] text-zinc-700 transition outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-300/20 dark:border-[#2a2e32] dark:bg-[#16191c] dark:text-zinc-100"
                         @change="
                             applyTemplate(
                                 ($event.target as HTMLSelectElement).value,

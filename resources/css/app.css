@@ -77,6 +77,24 @@
     ::file-selector-button {
         border-color: var(--color-gray-200, currentColor);
     }
+
+    select {
+        color-scheme: light;
+    }
+
+    select option {
+        background-color: #ffffff;
+        color: #3f3f46;
+    }
+
+    .dark select {
+        color-scheme: dark;
+    }
+
+    .dark select option {
+        background-color: #16191c;
+        color: #e4e4e7;
+    }
 }
 
 @layer utilities {
