@@ -28,11 +28,11 @@ function inboxFixture(): array
     return [$user, $project, $source];
 }
 
-function receiveThreadedEmail($test, Source $source, string $subject, string $messageId, string $from = 'maya@customer.test'): void
+function receiveThreadedEmail($test, Source $source, string $subject, string $messageId, string $from = 'maya@customer.test', string $to = 'support@example.com'): void
 {
     $mime = implode("\r\n", [
         "From: {$from}",
-        'To: support@example.com',
+        "To: {$to}",
         "Subject: {$subject}",
         "Message-ID: <{$messageId}>",
         'Content-Type: text/plain; charset=utf-8',
@@ -43,7 +43,7 @@ function receiveThreadedEmail($test, Source $source, string $subject, string $me
 
     $test->postJson("/api/webhooks/inbound/cloudflare/{$source->webhook_token}", [
         'from' => $from,
-        'to' => 'support@example.com',
+        'to' => $to,
         'raw' => base64_encode($mime),
     ])->assertStatus(202);
 }
@@ -72,6 +72,38 @@ it('renders the inbox with threads, counts, and interleaved messages', function 
             ->where('projects.0.is_current', true)
             ->where('projects.0.href', '/projects/helpdesk/inbox')
             ->where('addresses.0.address', 'support@example.com'));
+});
+
+it('counts and filters addresses by distinct conversations in the current mailbox', function () {
+    [$user, $project, $source] = inboxFixture();
+
+    Queue::fake();
+
+    receiveThreadedEmail($this, $source, 'Repeated conversation', 'address-1@customer.test');
+    receiveThreadedEmail($this, $source, 'Repeated conversation', 'address-2@customer.test');
+    receiveThreadedEmail($this, $source, 'Another conversation', 'address-3@customer.test');
+    receiveThreadedEmail($this, $source, 'Archived address', 'address-4@customer.test', to: 'archive@example.com');
+
+    $archivedThread = Thread::query()
+        ->whereHas('inboundEmails', fn ($query) => $query->where('to_email', 'archive@example.com'))
+        ->firstOrFail();
+    $archivedThread->forceFill(['archived_at' => now()])->save();
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?mailbox=inbox&address=support%40example.com")
+        ->assertInertia(fn ($page) => $page
+            ->has('addresses', 1)
+            ->where('addresses.0.address', 'support@example.com')
+            ->where('addresses.0.count', 2)
+            ->has('threads', 2));
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/inbox?mailbox=archived")
+        ->assertInertia(fn ($page) => $page
+            ->has('addresses', 1)
+            ->where('addresses.0.address', 'archive@example.com')
+            ->where('addresses.0.count', 1)
+            ->has('threads', 1));
 });
 
 it('marks a thread read when opened explicitly', function () {

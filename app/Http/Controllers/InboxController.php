@@ -9,6 +9,7 @@ use App\Models\Thread;
 use App\Models\ThreadNote;
 use App\Models\User;
 use App\Support\ProjectContext;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -69,7 +70,7 @@ class InboxController extends Controller
             'mailbox' => $mailbox,
             'address' => $address,
             'filters' => ['q' => $search, 'assigned' => $assigned],
-            'addresses' => $this->addresses($project),
+            'addresses' => $this->addresses($project, $user->id, $mailbox),
             'counts' => [
                 'inbox' => $project->threads()->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->count(),
                 'unread' => $project->threads()->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->whereDoesntHave('userStates', fn ($query) => $query->where('user_id', $user->id)->whereNotNull('read_at'))->count(),
@@ -101,12 +102,11 @@ class InboxController extends Controller
     private function threadsFor(Project $project, int $userId, string $mailbox, ?string $address, string $search, string $assigned, int $page)
     {
         return $project->threads()
-            ->when($mailbox === 'inbox', fn ($query) => $query->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...)))
-            ->when($mailbox === 'unread', fn ($query) => $query->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->whereDoesntHave('userStates', fn ($state) => $state->where('user_id', $userId)->whereNotNull('read_at')))
-            ->when($mailbox === 'snoozed', fn ($query) => $query->where('snoozed_until', '>', now()))
-            ->when($mailbox === 'archived', fn ($query) => $query->whereNotNull('archived_at'))
-            ->when($mailbox === 'closed', fn ($query) => $query->where('status', 'closed'))
-            ->when($address, fn ($query) => $query->whereJsonContains('participants', Str::lower($address)))
+            ->tap(fn (Builder $query) => $this->applyMailbox($query, $mailbox, $userId))
+            ->when($address, fn ($query) => $query->whereHas(
+                'inboundEmails',
+                fn ($messages) => $messages->whereRaw('LOWER(to_email) = ?', [Str::lower($address)]),
+            ))
             ->when($assigned === 'mine', fn ($query) => $query->where('assigned_to_user_id', $userId))
             ->when($assigned === 'unassigned', fn ($query) => $query->whereNull('assigned_to_user_id'))
             ->when($search !== '', function ($query) use ($search): void {
@@ -123,6 +123,16 @@ class InboxController extends Controller
             ->offset(($page - 1) * 50)
             ->limit(51)
             ->get();
+    }
+
+    private function applyMailbox(Builder $query, string $mailbox, int $userId): void
+    {
+        $query
+            ->when($mailbox === 'inbox', fn ($threads) => $threads->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...)))
+            ->when($mailbox === 'unread', fn ($threads) => $threads->whereNull('archived_at')->where('status', '!=', 'closed')->where($this->notSnoozed(...))->whereDoesntHave('userStates', fn ($state) => $state->where('user_id', $userId)->whereNotNull('read_at')))
+            ->when($mailbox === 'snoozed', fn ($threads) => $threads->where('snoozed_until', '>', now()))
+            ->when($mailbox === 'archived', fn ($threads) => $threads->whereNotNull('archived_at'))
+            ->when($mailbox === 'closed', fn ($threads) => $threads->where('status', 'closed'));
     }
 
     private function notSnoozed(mixed $query): void
@@ -246,15 +256,17 @@ class InboxController extends Controller
      *
      * @return array<int, array{address: string, count: int}>
      */
-    private function addresses(Project $project): array
+    private function addresses(Project $project, int $userId, string $mailbox): array
     {
         return $project->inboundEmails()
-            ->selectRaw('to_email, count(*) as total')
-            ->groupBy('to_email')
+            ->whereNotNull('thread_id')
+            ->whereHas('thread', fn (Builder $query) => $this->applyMailbox($query, $mailbox, $userId))
+            ->selectRaw('LOWER(to_email) as address, count(distinct thread_id) as total')
+            ->groupByRaw('LOWER(to_email)')
             ->orderByDesc('total')
             ->limit(12)
             ->get()
-            ->map(fn ($row): array => ['address' => $row->to_email, 'count' => (int) $row->total])
+            ->map(fn ($row): array => ['address' => $row->address, 'count' => (int) $row->total])
             ->all();
     }
 }

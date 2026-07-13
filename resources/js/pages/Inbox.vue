@@ -122,6 +122,10 @@ const props = defineProps<{
         | null;
 }>();
 
+const isDarkMode = ref(false);
+const isThemeReady = ref(false);
+let themeObserver: MutationObserver | null = null;
+
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const mobileThreadOpen = ref(false);
@@ -428,6 +432,15 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
+    isDarkMode.value = document.documentElement.classList.contains('dark');
+    isThemeReady.value = true;
+    themeObserver = new MutationObserver(() => {
+        isDarkMode.value = document.documentElement.classList.contains('dark');
+    });
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class'],
+    });
     mobileThreadOpen.value = new URLSearchParams(window.location.search).has(
         'thread',
     );
@@ -435,7 +448,10 @@ onMounted(() => {
     notificationsEnabled.value =
         localStorage.getItem('larasend:inbox-notifications') === '1';
 });
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+    themeObserver?.disconnect();
+    window.removeEventListener('keydown', onKeydown);
+});
 
 usePoll(
     10000,
@@ -702,7 +718,7 @@ watch(
 // Message HTML renders inside a sandboxed iframe (no scripts). The wrapper
 // document gives foreign markup native typography; the load handler sizes
 // the frame to its content so short messages stay short.
-function messageDocument(html: string): string {
+function messageDocument(html: string, dark: boolean): string {
     const safeHtml = html
         .replace(
             /<img\b[^>]*>/gi,
@@ -710,14 +726,20 @@ function messageDocument(html: string): string {
         )
         .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ');
 
+    const foreground = dark ? '#e4e4e7' : '#27272a';
+    const muted = dark ? '#a1a1aa' : '#71717a';
+    const link = dark ? '#5eead4' : '#0d9488';
+
     return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: cid:"><style>
-body{margin:0;padding:1px;font:13px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#27272a;word-break:break-word;overflow-wrap:anywhere}
+html{color-scheme:${dark ? 'dark' : 'light'};background:transparent}
+body{margin:0;padding:1px;background:transparent;font:13px/1.6 ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:${foreground};word-break:break-word;overflow-wrap:anywhere}
+${dark ? `body :where(p,div,span,td,th,li,pre,code,strong,em){color:${foreground}!important}` : ''}
 img{max-width:100%;height:auto}
 p{margin:0 0 .6em}p:last-child{margin-bottom:0}
 ul,ol{margin:0 0 .6em;padding-left:1.4em}
-blockquote{margin:0 0 .6em;padding-left:.8em;border-left:2px solid #99f6e4;color:#71717a}
+blockquote{margin:0 0 .6em;padding-left:.8em;border-left:2px solid #99f6e4;color:${muted}}
 pre{white-space:pre-wrap;font:12px/1.6 ui-monospace,monospace}
-a{color:#0d9488}
+a{color:${link}!important}
 table{max-width:100%}
 </style></head><body>${safeHtml}</body></html>`;
 }
@@ -1526,10 +1548,10 @@ function participantSummary(thread: ThreadRow): string {
                             to {{ message.to }}
                         </div>
                         <iframe
-                            v-if="message.html"
-                            :srcdoc="messageDocument(message.html)"
+                            v-if="message.html && isThemeReady"
+                            :srcdoc="messageDocument(message.html, isDarkMode)"
                             sandbox="allow-same-origin allow-popups"
-                            class="h-6 w-full rounded-md bg-white"
+                            class="h-6 w-full rounded-md bg-white dark:bg-[#101111]"
                             :title="`Message from ${message.from_email}`"
                             @load="fitMessageFrame"
                         />
