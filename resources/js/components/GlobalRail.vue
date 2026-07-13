@@ -267,7 +267,7 @@ const mobileItems = computed(() => [
         </div>
 
         <nav
-            class="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-3 py-3"
+            class="grid min-h-0 flex-1 content-start gap-5 overflow-y-auto px-3 py-3"
         >
             <section v-for="group in navigationGroups" :key="group.label">
                 <h2
