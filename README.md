@@ -1,5 +1,7 @@
 # Larasend
 
+[![Boop! it to Laravel Cloud](https://deploy.laravel.cloud/boop.svg)](https://deploy.laravel.cloud/github/savvyagents/larasend)
+
 Larasend is a self-hosted transactional email platform for Laravel teams. It gives you a clean HTTP API, dashboard, activity log, API keys, delivery events, suppressions, and a Laravel mail transport while sending through your own Amazon SES account or Cloudflare Email Service.
 
 ![Larasend activity dashboard](.github/dashboard.png)
