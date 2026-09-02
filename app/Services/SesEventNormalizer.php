@@ -25,9 +25,11 @@ class SesEventNormalizer
         $sesMessageId = $message['messageId'] ?? null;
         $detail = $payload[$eventType] ?? $payload[ucfirst($eventType)] ?? [];
         $recipient = $this->recipient($eventType, $detail, $message);
-        $email = $sesMessageId
-            ? Email::query()->where('source_id', $source->id)->where('ses_message_id', $sesMessageId)->first()
-            : null;
+        $emailMatches = $sesMessageId
+            ? Email::query()->with('source')->where('ses_message_id', $sesMessageId)->limit(2)->get()
+            : collect();
+        $email = $emailMatches->count() === 1 ? $emailMatches->first() : null;
+        $source = $email?->source ?? $source;
         $providerEventId = hash('sha256', $source->id.'|'.($providerMessageId ?: json_encode($payload, JSON_THROW_ON_ERROR)));
         $existing = EmailEvent::query()->where('provider_event_id', $providerEventId)->first();
 

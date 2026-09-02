@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Email;
+use App\Models\EmailEvent;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Suppression;
@@ -221,6 +222,47 @@ it('normalizes ses delivery events', function () {
 
     expect($email->fresh()->status)->toBe('delivered')
         ->and($email->events()->where('event_type', 'delivery')->exists())->toBeTrue();
+});
+
+it('correlates events delivered through another source webhook', function () {
+    [$webhookSource] = sesWebhookFixture();
+    $project = Project::create([
+        'workspace_id' => $webhookSource->project->workspace_id,
+        'name' => 'Shared SNS Project',
+        'slug' => 'shared-sns-project',
+    ]);
+    $emailSource = Source::create([
+        'project_id' => $project->id,
+        'name' => 'Shared SNS Source',
+        'webhook_token' => 'shared-sns-source-token',
+    ]);
+    $email = Email::create([
+        'public_id' => 'email_shared_sns',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'source_id' => $emailSource->id,
+        'status' => 'sent',
+        'ses_message_id' => 'ses-shared-sns',
+        'from_email' => 'receipts@example.com',
+        'subject' => 'Shared SNS receipt',
+    ]);
+
+    Http::fake([SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate())]);
+
+    $message = [
+        'eventType' => 'Delivery',
+        'mail' => ['messageId' => 'ses-shared-sns', 'timestamp' => now()->toIso8601String(), 'destination' => ['maya@example.com']],
+        'delivery' => ['recipients' => ['maya@example.com'], 'timestamp' => now()->toIso8601String()],
+    ];
+
+    $this->postJson(
+        "/api/webhooks/ses/{$webhookSource->webhook_token}",
+        sesSignedSnsEnvelope('Notification', ['Message' => json_encode($message)]),
+    )->assertSuccessful();
+
+    expect($email->fresh()->status)->toBe('delivered')
+        ->and($email->events()->where('event_type', 'delivery')->value('source_id'))->toBe($emailSource->id)
+        ->and(EmailEvent::query()->where('source_id', $webhookSource->id)->where('ses_message_id', 'ses-shared-sns')->exists())->toBeFalse();
 });
 
 it('deduplicates repeated sns notifications by message id', function () {
