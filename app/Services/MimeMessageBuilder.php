@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use InvalidArgumentException;
 use Symfony\Component\Mime\Address;
 use Symfony\Component\Mime\Email;
 
@@ -55,7 +56,14 @@ class MimeMessageBuilder
         }
 
         foreach ($headers as $name => $value) {
-            $email->getHeaders()->addTextHeader((string) $name, (string) $value);
+            $name = (string) $name;
+            $value = (string) $value;
+
+            if (preg_match('/[\r\n]/', $name.$value) === 1) {
+                throw new InvalidArgumentException('Custom email headers may not contain CR or LF characters.');
+            }
+
+            $email->getHeaders()->addTextHeader($name, $value);
         }
 
         foreach ($attachments as $attachment) {
