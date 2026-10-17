@@ -93,7 +93,13 @@ class FortifyServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('login', function (Request $request) {
-            $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
+            // Key on the socket address rather than $request->ip(): forwarded
+            // headers are client-controlled unless a trusted proxy strips them,
+            // and must not let an attacker rotate throttle keys.
+            $socketAddress = $request->server->get('REMOTE_ADDR');
+            $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.(
+                is_string($socketAddress) && $socketAddress !== '' ? $socketAddress : 'unknown'
+            ));
 
             return Limit::perMinute(5)->by($throttleKey);
         });
