@@ -35,9 +35,9 @@ class ActivityExportController extends Controller
                 fputcsv($handle, [
                     $email->public_id,
                     $email->status,
-                    $recipient?->email,
-                    $email->subject,
-                    $email->template?->slug ?? '',
+                    $this->formulaSafe($recipient?->email ?? ''),
+                    $this->formulaSafe($email->subject ?? ''),
+                    $this->formulaSafe($email->template?->slug ?? ''),
                     $email->sent_at?->toIso8601String() ?: $email->created_at->toIso8601String(),
                     $email->ses_message_id,
                 ]);

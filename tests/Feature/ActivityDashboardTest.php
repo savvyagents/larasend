@@ -707,6 +707,45 @@ it('filters activity by search query and exports csv', function () {
         ->toContain('maya.okafor@northwind.io');
 });
 
+it('exports activity rows with formula-safe values', function () {
+    $user = User::factory()->create();
+    $project = seedActivityDashboardData($user);
+    $source = $project->sources()->firstOrFail();
+    $template = $project->templates()->create([
+        'slug' => '=hijack.template',
+        'name' => 'Hijack',
+        'subject' => 'Hijack subject',
+        'html' => '<p>Hijack</p>',
+        'text' => 'Hijack',
+        'variables' => [],
+    ]);
+
+    $email = Email::create([
+        'public_id' => 'email_formula_test',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'source_id' => $source->id,
+        'template_id' => $template->id,
+        'environment' => $source->environment,
+        'status' => 'delivered',
+        'ses_message_id' => 'msg_formula',
+        'from_email' => 'receipts@larasend.app',
+        'subject' => '=cmd 2+2 in A0',
+        'sent_at' => now(),
+    ]);
+    $email->recipients()->create(['type' => 'to', 'name' => 'Evil', 'email' => '+evil@example.com']);
+
+    $export = $this->actingAs($user)
+        ->get('/activity/export')
+        ->assertSuccessful()
+        ->assertHeader('content-type', 'text/csv; charset=UTF-8');
+
+    expect($export->streamedContent())
+        ->toContain("'=cmd 2+2 in A0")
+        ->toContain("'+evil@example.com")
+        ->toContain("'=hijack.template");
+});
+
 it('exports suppression rows with formula-safe values', function () {
     $user = User::factory()->create();
     $project = seedActivityDashboardData($user);
