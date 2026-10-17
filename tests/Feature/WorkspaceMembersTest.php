@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Models\Workspace;
 use App\Notifications\ControlEmailVerification;
 use App\Notifications\ControlPasswordReset;
+use App\Support\ProjectContext;
 use Illuminate\Contracts\Notifications\Dispatcher as NotificationDispatcher;
 use Illuminate\Support\Facades\Notification;
 
@@ -192,6 +193,56 @@ it('allows owners to update and remove workspace members', function () {
         ->assertRedirect();
 
     expect($workspace->users()->whereKey($member->id)->exists())->toBeFalse();
+});
+
+it('keeps a user in their own workspace context when added to a lower-id workspace', function () {
+    [, $foreignWorkspace] = workspaceMembersFixture();
+    $victim = User::factory()->create(['email' => 'victim@example.com']);
+    $ownWorkspace = app(ProjectContext::class)->workspaceFor($victim);
+
+    $foreignWorkspace->users()->attach($victim, ['role' => 'member']);
+
+    expect($foreignWorkspace->id)->toBeLessThan($ownWorkspace->id)
+        ->and(app(ProjectContext::class)->workspaceFor($victim)->is($ownWorkspace))->toBeTrue();
+});
+
+it('still resolves a membership workspace for users who own none', function () {
+    [, $workspace] = workspaceMembersFixture();
+    $member = User::factory()->create();
+    $workspace->users()->attach($member, ['role' => 'member']);
+
+    expect(app(ProjectContext::class)->workspaceFor($member)->is($workspace))->toBeTrue();
+});
+
+it('allows members to leave a workspace they do not own', function () {
+    [, $workspace] = workspaceMembersFixture();
+    $member = User::factory()->create();
+    $workspace->users()->attach($member, ['role' => 'member']);
+
+    $this->actingAs($member)
+        ->delete("/workspace/{$workspace->id}/membership")
+        ->assertRedirect('/activity');
+
+    expect($workspace->users()->whereKey($member->id)->exists())->toBeFalse();
+});
+
+it('does not allow the owner to leave their own workspace', function () {
+    [$owner, $workspace] = workspaceMembersFixture();
+
+    $this->actingAs($owner)
+        ->delete("/workspace/{$workspace->id}/membership")
+        ->assertStatus(422);
+
+    expect($workspace->users()->whereKey($owner->id)->exists())->toBeTrue();
+});
+
+it('returns not found when leaving a workspace without a membership', function () {
+    [, $workspace] = workspaceMembersFixture();
+    $outsider = User::factory()->create();
+
+    $this->actingAs($outsider)
+        ->delete("/workspace/{$workspace->id}/membership")
+        ->assertNotFound();
 });
 
 it('does not allow removing the workspace owner', function () {

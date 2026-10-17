@@ -92,6 +92,25 @@ class WorkspaceMemberController extends Controller
         return back();
     }
 
+    /**
+     * Let a user remove themselves from a workspace they do not own, so being
+     * added to someone else's workspace is never a membership they cannot undo.
+     */
+    public function leave(Request $request, Workspace $workspace): RedirectResponse
+    {
+        $user = $request->user();
+
+        abort_unless($user instanceof User, 403);
+        abort_unless($workspace->users()->whereKey($user->id)->exists(), 404);
+        abort_if($workspace->owner_id === $user->id, 422, 'The workspace owner cannot leave the workspace.');
+
+        $workspace->users()->detach($user->id);
+
+        Inertia::flash('toast', ['type' => 'success', 'message' => 'You left the workspace.']);
+
+        return redirect('/activity');
+    }
+
     private function manageableWorkspace(Request $request, ProjectContext $context): Workspace
     {
         $user = $request->user();
