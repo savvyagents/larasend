@@ -67,6 +67,98 @@ it('rejects sns subscription confirmations from unexpected hosts', function () {
     expect(WebhookLog::query()->where('status', 'rejected')->exists())->toBeTrue();
 });
 
+it('pins the topic arn from the first sns subscription confirmation', function () {
+    [$source] = sesWebhookFixture();
+
+    Http::fake([
+        SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate()),
+        'https://sns.us-east-1.amazonaws.com/confirm' => Http::response('ok'),
+    ]);
+
+    $envelope = sesSignedSnsEnvelope('SubscriptionConfirmation', [
+        'SubscribeURL' => 'https://sns.us-east-1.amazonaws.com/confirm',
+    ]);
+
+    $this->postJson("/api/webhooks/ses/{$source->webhook_token}", $envelope)->assertSuccessful();
+
+    expect($source->fresh()->sns_topic_arn)->toBe('arn:aws:sns:us-east-1:123456789012:larasend-test');
+});
+
+it('rejects subscription confirmations for a different topic than the pinned one', function () {
+    [$source] = sesWebhookFixture();
+    $source->forceFill(['sns_topic_arn' => 'arn:aws:sns:us-east-1:123456789012:larasend-test'])->save();
+
+    Http::fake([
+        SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate()),
+        'https://sns.us-east-1.amazonaws.com/confirm' => Http::response('ok'),
+    ]);
+
+    $envelope = sesSignedSnsEnvelope('SubscriptionConfirmation', [
+        'SubscribeURL' => 'https://sns.us-east-1.amazonaws.com/confirm',
+        'TopicArn' => 'arn:aws:sns:us-east-1:999999999999:attacker-topic',
+    ]);
+
+    $this->postJson("/api/webhooks/ses/{$source->webhook_token}", $envelope)->assertUnprocessable();
+
+    Http::assertNotSent(fn ($request) => $request->url() === 'https://sns.us-east-1.amazonaws.com/confirm');
+
+    expect($source->fresh()->sns_topic_arn)->toBe('arn:aws:sns:us-east-1:123456789012:larasend-test')
+        ->and(WebhookLog::query()->where('status', 'rejected')->exists())->toBeTrue();
+});
+
+it('rejects validly signed notifications from a different sns topic', function () {
+    [$source, $email] = sesWebhookFixture();
+    $source->forceFill(['sns_topic_arn' => 'arn:aws:sns:us-east-1:123456789012:larasend-test'])->save();
+
+    Http::fake([
+        SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate()),
+    ]);
+
+    $message = [
+        'eventType' => 'Delivery',
+        'mail' => ['messageId' => 'ses-1', 'timestamp' => now()->toIso8601String(), 'destination' => ['maya@example.com']],
+        'delivery' => ['recipients' => ['maya@example.com'], 'timestamp' => now()->toIso8601String()],
+    ];
+
+    $envelope = sesSignedSnsEnvelope('Notification', [
+        'Message' => json_encode($message),
+        'TopicArn' => 'arn:aws:sns:us-east-1:999999999999:attacker-topic',
+    ]);
+
+    $this->postJson("/api/webhooks/ses/{$source->webhook_token}", $envelope)->assertUnprocessable();
+
+    expect($email->fresh()->status)->toBe('sent')
+        ->and(WebhookLog::query()->where('status', 'rejected')->exists())->toBeTrue();
+});
+
+it('rejects sns envelopes with stale or far-future timestamps', function (string $timestamp) {
+    [$source, $email] = sesWebhookFixture();
+
+    Http::fake([
+        SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate()),
+    ]);
+
+    $message = [
+        'eventType' => 'Delivery',
+        'mail' => ['messageId' => 'ses-1', 'timestamp' => now()->toIso8601String(), 'destination' => ['maya@example.com']],
+        'delivery' => ['recipients' => ['maya@example.com'], 'timestamp' => now()->toIso8601String()],
+    ];
+
+    $envelope = sesSignedSnsEnvelope('Notification', [
+        'Message' => json_encode($message),
+        'Timestamp' => $timestamp,
+    ]);
+
+    $this->postJson("/api/webhooks/ses/{$source->webhook_token}", $envelope)->assertUnprocessable();
+
+    expect($email->fresh()->status)->toBe('sent')
+        ->and(WebhookLog::query()->where('status', 'rejected')->exists())->toBeTrue();
+})->with([
+    'replayed envelope' => fn () => now()->subMinutes(16)->toIso8601String(),
+    'far-future envelope' => fn () => now()->addMinutes(6)->toIso8601String(),
+    'unparseable timestamp' => 'not-a-timestamp',
+]);
+
 it('rejects ses events with no valid sns signature', function () {
     [$source, $email] = sesWebhookFixture();
 

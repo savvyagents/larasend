@@ -28,6 +28,7 @@ class Source extends Model
         'cloudflare_api_token',
         'cloudflare_account_id',
         'webhook_token',
+        'sns_topic_arn',
         'retention_days',
         'monthly_quota',
         'max_send_rate',

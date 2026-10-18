@@ -80,3 +80,35 @@ test('users are rate limited', function () {
 
     $response->assertTooManyRequests();
 });
+
+test('rotating forwarded headers does not reset the login rate limit', function () {
+    $user = User::factory()->create();
+
+    foreach (range(1, 5) as $attempt) {
+        $this->withHeaders(['X-Forwarded-For' => "203.0.113.{$attempt}"])
+            ->post(route('login.store'), [
+                'email' => $user->email,
+                'password' => 'wrong-password',
+            ]);
+    }
+
+    $this->withHeaders(['X-Forwarded-For' => '203.0.113.99'])
+        ->post(route('login.store'), [
+            'email' => $user->email,
+            'password' => 'wrong-password',
+        ])
+        ->assertTooManyRequests();
+});
+
+test('login throttling keys on the socket address, not forwarded headers', function () {
+    $user = User::factory()->create();
+
+    RateLimiter::increment(md5('login'.implode('|', [$user->email, '127.0.0.1'])), amount: 5);
+
+    $this->withHeaders(['X-Forwarded-For' => '203.0.113.7'])
+        ->post(route('login.store'), [
+            'email' => $user->email,
+            'password' => 'wrong-password',
+        ])
+        ->assertTooManyRequests();
+});
