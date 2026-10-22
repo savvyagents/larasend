@@ -26,7 +26,7 @@ COPY vite.config.ts tsconfig.json ./
 COPY public ./public
 RUN APP_ENV=production APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= npm run build
 
-FROM php:8.4-fpm-alpine
+FROM php:8.4.27-fpm-alpine3.24@sha256:6b83fd767e1902ae4c89fe11f929f02e78bf769215c703060ac8a7c4be672c8c
 WORKDIR /var/www/html
 
 RUN apk add --no-cache bash icu-dev libpq-dev nginx oniguruma-dev \
