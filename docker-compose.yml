@@ -21,6 +21,7 @@ services:
 
   queue:
     image: ${LARASEND_IMAGE:-ghcr.io/savvyagents/larasend:latest}
+    stop_grace_period: 3m
     command: php artisan queue:work --queue=default,webhooks --tries=3 --timeout=150
     env_file: .env
     environment:
