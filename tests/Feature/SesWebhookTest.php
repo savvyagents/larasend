@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Email;
+use App\Models\EmailEvent;
 use App\Models\Project;
 use App\Models\Source;
 use App\Models\Suppression;
@@ -221,6 +222,96 @@ it('normalizes ses delivery events', function () {
 
     expect($email->fresh()->status)->toBe('delivered')
         ->and($email->events()->where('event_type', 'delivery')->exists())->toBeTrue();
+});
+
+it('correlates events delivered through another source webhook', function () {
+    [$webhookSource] = sesWebhookFixture();
+    $project = Project::create([
+        'workspace_id' => $webhookSource->project->workspace_id,
+        'name' => 'Shared SNS Project',
+        'slug' => 'shared-sns-project',
+    ]);
+    $emailSource = Source::create([
+        'project_id' => $project->id,
+        'name' => 'Shared SNS Source',
+        'webhook_token' => 'shared-sns-source-token',
+    ]);
+    $email = Email::create([
+        'public_id' => 'email_shared_sns',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'source_id' => $emailSource->id,
+        'status' => 'sent',
+        'ses_message_id' => 'ses-shared-sns',
+        'from_email' => 'receipts@example.com',
+        'subject' => 'Shared SNS receipt',
+    ]);
+
+    Http::fake([SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate())]);
+
+    $message = [
+        'eventType' => 'Delivery',
+        'mail' => ['messageId' => 'ses-shared-sns', 'timestamp' => now()->toIso8601String(), 'destination' => ['maya@example.com']],
+        'delivery' => ['recipients' => ['maya@example.com'], 'timestamp' => now()->toIso8601String()],
+    ];
+
+    $this->postJson(
+        "/api/webhooks/ses/{$webhookSource->webhook_token}",
+        sesSignedSnsEnvelope('Notification', ['Message' => json_encode($message)]),
+    )->assertSuccessful();
+
+    expect($email->fresh()->status)->toBe('delivered')
+        ->and($email->events()->where('event_type', 'delivery')->value('source_id'))->toBe($emailSource->id)
+        ->and(EmailEvent::query()->where('source_id', $webhookSource->id)->where('ses_message_id', 'ses-shared-sns')->exists())->toBeFalse();
+});
+
+it('does not correlate an event into another workspace', function () {
+    [$webhookSource] = sesWebhookFixture();
+    $otherUser = User::factory()->create();
+    $otherWorkspace = Workspace::create(['owner_id' => $otherUser->id, 'name' => 'Other', 'slug' => 'other-workspace']);
+    $otherProject = Project::create([
+        'workspace_id' => $otherWorkspace->id,
+        'name' => 'Other Project',
+        'slug' => 'other-project',
+    ]);
+    $otherSource = Source::create([
+        'project_id' => $otherProject->id,
+        'name' => 'Other Source',
+        'webhook_token' => 'other-workspace-source-token',
+    ]);
+    $email = Email::create([
+        'public_id' => 'email_other_workspace',
+        'workspace_id' => $otherWorkspace->id,
+        'project_id' => $otherProject->id,
+        'source_id' => $otherSource->id,
+        'status' => 'sent',
+        'ses_message_id' => 'ses-other-workspace',
+        'from_email' => 'receipts@example.com',
+        'subject' => 'Other workspace receipt',
+    ]);
+
+    Http::fake([SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate())]);
+
+    $bounce = [
+        'eventType' => 'Bounce',
+        'mail' => ['messageId' => 'ses-other-workspace', 'timestamp' => now()->toIso8601String(), 'destination' => ['maya@example.com']],
+        'bounce' => [
+            'bounceType' => 'Permanent',
+            'timestamp' => now()->toIso8601String(),
+            'bouncedRecipients' => [
+                ['emailAddress' => 'maya@example.com', 'status' => '550', 'diagnosticCode' => 'No such user'],
+            ],
+        ],
+    ];
+
+    $this->postJson(
+        "/api/webhooks/ses/{$webhookSource->webhook_token}",
+        sesSignedSnsEnvelope('Notification', ['Message' => json_encode($bounce)]),
+    )->assertSuccessful();
+
+    expect($email->fresh()->status)->toBe('sent')
+        ->and($email->events()->exists())->toBeFalse()
+        ->and(Suppression::query()->where('workspace_id', $otherWorkspace->id)->exists())->toBeFalse();
 });
 
 it('deduplicates repeated sns notifications by message id', function () {
