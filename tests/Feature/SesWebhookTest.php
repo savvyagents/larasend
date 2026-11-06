@@ -265,6 +265,55 @@ it('correlates events delivered through another source webhook', function () {
         ->and(EmailEvent::query()->where('source_id', $webhookSource->id)->where('ses_message_id', 'ses-shared-sns')->exists())->toBeFalse();
 });
 
+it('does not correlate an event into another workspace', function () {
+    [$webhookSource] = sesWebhookFixture();
+    $otherUser = User::factory()->create();
+    $otherWorkspace = Workspace::create(['owner_id' => $otherUser->id, 'name' => 'Other', 'slug' => 'other-workspace']);
+    $otherProject = Project::create([
+        'workspace_id' => $otherWorkspace->id,
+        'name' => 'Other Project',
+        'slug' => 'other-project',
+    ]);
+    $otherSource = Source::create([
+        'project_id' => $otherProject->id,
+        'name' => 'Other Source',
+        'webhook_token' => 'other-workspace-source-token',
+    ]);
+    $email = Email::create([
+        'public_id' => 'email_other_workspace',
+        'workspace_id' => $otherWorkspace->id,
+        'project_id' => $otherProject->id,
+        'source_id' => $otherSource->id,
+        'status' => 'sent',
+        'ses_message_id' => 'ses-other-workspace',
+        'from_email' => 'receipts@example.com',
+        'subject' => 'Other workspace receipt',
+    ]);
+
+    Http::fake([SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate())]);
+
+    $bounce = [
+        'eventType' => 'Bounce',
+        'mail' => ['messageId' => 'ses-other-workspace', 'timestamp' => now()->toIso8601String(), 'destination' => ['maya@example.com']],
+        'bounce' => [
+            'bounceType' => 'Permanent',
+            'timestamp' => now()->toIso8601String(),
+            'bouncedRecipients' => [
+                ['emailAddress' => 'maya@example.com', 'status' => '550', 'diagnosticCode' => 'No such user'],
+            ],
+        ],
+    ];
+
+    $this->postJson(
+        "/api/webhooks/ses/{$webhookSource->webhook_token}",
+        sesSignedSnsEnvelope('Notification', ['Message' => json_encode($bounce)]),
+    )->assertSuccessful();
+
+    expect($email->fresh()->status)->toBe('sent')
+        ->and($email->events()->exists())->toBeFalse()
+        ->and(Suppression::query()->where('workspace_id', $otherWorkspace->id)->exists())->toBeFalse();
+});
+
 it('deduplicates repeated sns notifications by message id', function () {
     [$source, $email] = sesWebhookFixture();
     Http::fake([SES_TEST_SIGNING_CERT_URL => Http::response(sesTestPublicCertificate())]);

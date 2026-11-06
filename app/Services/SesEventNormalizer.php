@@ -26,7 +26,12 @@ class SesEventNormalizer
         $detail = $payload[$eventType] ?? $payload[ucfirst($eventType)] ?? [];
         $recipient = $this->recipient($eventType, $detail, $message);
         $emailMatches = $sesMessageId
-            ? Email::query()->with('source')->where('ses_message_id', $sesMessageId)->limit(2)->get()
+            ? Email::query()
+                ->with('source')
+                ->where('workspace_id', $source->project->workspace_id)
+                ->where('ses_message_id', $sesMessageId)
+                ->limit(2)
+                ->get()
             : collect();
         $email = $emailMatches->count() === 1 ? $emailMatches->first() : null;
         $source = $email?->source ?? $source;
