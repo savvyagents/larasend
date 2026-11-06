@@ -26,6 +26,19 @@ use Inertia\Response;
 
 class ActivityController extends Controller
 {
+    private const EMAILS_PER_PAGE = 50;
+
+    private const FILTERABLE_EMAIL_STATUSES = [
+        'delivered',
+        'opened',
+        'clicked',
+        'queued',
+        'sending',
+        'bounced',
+        'complained',
+        'failed',
+    ];
+
     public function __construct(
         private EmailProviderFactory $providers,
         private SystemHealth $systemHealth,
@@ -62,9 +75,24 @@ class ActivityController extends Controller
             return redirect($context->sectionPath($project, 'identities'));
         }
 
-        $emails = $this->activityEmailsQuery($project, $request, $section)
-            ->limit(50)
-            ->get();
+        $emailPage = $section === 'outbound' ? max(1, $request->integer('page', 1)) : 1;
+        $emailStatus = $this->selectedEmailStatus($request, $section);
+        $emailQuery = $this->activityEmailsQuery($project, $request, $section);
+        $emailStatusCounts = $section === 'outbound'
+            ? $this->emailStatusCounts(clone $emailQuery)
+            : [];
+
+        if ($emailStatus !== '') {
+            $emailQuery->where('status', $emailStatus);
+        }
+
+        $emailRows = $section === 'outbound'
+            ? $emailQuery
+                ->offset(($emailPage - 1) * self::EMAILS_PER_PAGE)
+                ->limit(self::EMAILS_PER_PAGE + 1)
+                ->get()
+            : $emailQuery->limit(self::EMAILS_PER_PAGE)->get();
+        $emails = $emailRows->take(self::EMAILS_PER_PAGE);
 
         $selected = $emails->first();
         $canSend = $source ? $this->canSend($project, $source) : false;
@@ -145,12 +173,22 @@ class ActivityController extends Controller
             'filters' => [
                 'q' => $request->string('q')->toString(),
                 'range' => $range,
+                'status' => $emailStatus,
             ],
             'metrics' => $this->metrics($project, $range),
             'dashboard' => $dashboard,
             'bounceMetrics' => $this->bounceMetrics($project),
             'bounceQueue' => $this->bounceQueue($project, $request),
             'emails' => $emails->map(fn (Email $email) => $this->serializeEmail($email, detailed: true)),
+            'emailPagination' => [
+                'page' => $emailPage,
+                'per_page' => self::EMAILS_PER_PAGE,
+                'from' => $emails->isEmpty() ? null : (($emailPage - 1) * self::EMAILS_PER_PAGE) + 1,
+                'to' => $emails->isEmpty() ? null : (($emailPage - 1) * self::EMAILS_PER_PAGE) + $emails->count(),
+                'has_previous' => $emailPage > 1,
+                'has_more' => $section === 'outbound' && $emailRows->count() > self::EMAILS_PER_PAGE,
+            ],
+            'emailStatusCounts' => $emailStatusCounts,
             'selectedEmail' => $selected ? $this->serializeEmail($selected, detailed: true) : null,
             'source' => $source ? [
                 'name' => $source->name,
@@ -400,7 +438,8 @@ class ActivityController extends Controller
     {
         $query = $project->emails()
             ->with(['recipients', 'events', 'attachments', 'source', 'template'])
-            ->latest();
+            ->latest()
+            ->orderByDesc('id');
 
         match ($section) {
             'sent' => $query->whereIn('status', ['sent', 'delivered', 'opened', 'clicked']),
@@ -436,6 +475,33 @@ class ActivityController extends Controller
         }
 
         return $query;
+    }
+
+    private function selectedEmailStatus(Request $request, string $section): string
+    {
+        if ($section !== 'outbound') {
+            return '';
+        }
+
+        $status = Str::lower(trim($request->string('status')->toString()));
+
+        return in_array($status, self::FILTERABLE_EMAIL_STATUSES, true) ? $status : '';
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function emailStatusCounts(HasMany $query): array
+    {
+        $counts = $query
+            ->reorder()
+            ->selectRaw('status, COUNT(*) AS aggregate')
+            ->groupBy('status')
+            ->pluck('aggregate', 'status')
+            ->map(fn (mixed $count): int => (int) $count)
+            ->all();
+
+        return ['all' => array_sum($counts), ...$counts];
     }
 
     private function activeInboxThreads(Project $project): HasMany

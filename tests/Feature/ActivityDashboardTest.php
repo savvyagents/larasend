@@ -265,6 +265,83 @@ it('renders every outbound delivery state in the outbound log', function () {
         ->assertRedirect('/projects/my-project/outbound');
 });
 
+it('paginates filtered outbound email with stable ordering and page metadata', function () {
+    $user = User::factory()->create();
+    $project = seedActivityDashboardData($user);
+    $source = $project->sources()->firstOrFail();
+    $createdAt = now()->subMinute()->startOfSecond();
+
+    foreach (range(1, 51) as $number) {
+        $email = Email::create([
+            'public_id' => 'email_pagination_'.$number,
+            'workspace_id' => $project->workspace_id,
+            'project_id' => $project->id,
+            'source_id' => $source->id,
+            'environment' => $source->environment,
+            'status' => 'delivered',
+            'from_email' => 'receipts@larasend.app',
+            'subject' => 'Pagination message '.$number,
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ]);
+
+        $email->recipients()->create([
+            'type' => 'to',
+            'email' => "recipient{$number}@example.com",
+        ]);
+    }
+
+    Email::create([
+        'public_id' => 'email_pagination_failed',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'source_id' => $source->id,
+        'environment' => $source->environment,
+        'status' => 'failed',
+        'from_email' => 'receipts@larasend.app',
+        'subject' => 'Pagination message failed',
+        'created_at' => $createdAt,
+        'updated_at' => $createdAt,
+    ]);
+
+    $query = 'q=Pagination%20message&range=30d&status=delivered';
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/outbound?{$query}&page=-3")
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page
+            ->has('emails', 50)
+            ->where('emails.0.subject', 'Pagination message 51')
+            ->where('emails.49.subject', 'Pagination message 2')
+            ->where('selectedEmail.subject', 'Pagination message 51')
+            ->where('filters.status', 'delivered')
+            ->where('emailStatusCounts.all', 52)
+            ->where('emailStatusCounts.delivered', 51)
+            ->where('emailStatusCounts.failed', 1)
+            ->where('emailPagination.page', 1)
+            ->where('emailPagination.per_page', 50)
+            ->where('emailPagination.from', 1)
+            ->where('emailPagination.to', 50)
+            ->where('emailPagination.has_previous', false)
+            ->where('emailPagination.has_more', true));
+
+    $this->actingAs($user)
+        ->get("/projects/{$project->slug}/outbound?{$query}&page=2")
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page
+            ->has('emails', 1)
+            ->where('emails.0.subject', 'Pagination message 1')
+            ->where('selectedEmail.subject', 'Pagination message 1')
+            ->where('filters.q', 'Pagination message')
+            ->where('filters.range', '30d')
+            ->where('filters.status', 'delivered')
+            ->where('emailPagination.page', 2)
+            ->where('emailPagination.from', 51)
+            ->where('emailPagination.to', 51)
+            ->where('emailPagination.has_previous', true)
+            ->where('emailPagination.has_more', false));
+});
+
 it('calculates activity metric deltas against the previous matching period', function () {
     $user = User::factory()->create();
     $project = seedActivityDashboardData($user);
@@ -628,6 +705,45 @@ it('filters activity by search query and exports csv', function () {
     expect($export->streamedContent())
         ->toContain('Message ID')
         ->toContain('maya.okafor@northwind.io');
+});
+
+it('exports activity rows with formula-safe values', function () {
+    $user = User::factory()->create();
+    $project = seedActivityDashboardData($user);
+    $source = $project->sources()->firstOrFail();
+    $template = $project->templates()->create([
+        'slug' => '=hijack.template',
+        'name' => 'Hijack',
+        'subject' => 'Hijack subject',
+        'html' => '<p>Hijack</p>',
+        'text' => 'Hijack',
+        'variables' => [],
+    ]);
+
+    $email = Email::create([
+        'public_id' => 'email_formula_test',
+        'workspace_id' => $project->workspace_id,
+        'project_id' => $project->id,
+        'source_id' => $source->id,
+        'template_id' => $template->id,
+        'environment' => $source->environment,
+        'status' => 'delivered',
+        'ses_message_id' => 'msg_formula',
+        'from_email' => 'receipts@larasend.app',
+        'subject' => '=cmd 2+2 in A0',
+        'sent_at' => now(),
+    ]);
+    $email->recipients()->create(['type' => 'to', 'name' => 'Evil', 'email' => '+evil@example.com']);
+
+    $export = $this->actingAs($user)
+        ->get('/activity/export')
+        ->assertSuccessful()
+        ->assertHeader('content-type', 'text/csv; charset=UTF-8');
+
+    expect($export->streamedContent())
+        ->toContain("'=cmd 2+2 in A0")
+        ->toContain("'+evil@example.com")
+        ->toContain("'=hijack.template");
 });
 
 it('exports suppression rows with formula-safe values', function () {

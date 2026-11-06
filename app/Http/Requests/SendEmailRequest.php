@@ -110,6 +110,13 @@ class SendEmailRequest extends FormRequest
 
     private function isAllowedHeader(string $name): bool
     {
+        // RFC 5322 ftext: header names must be printable ASCII without colons.
+        // This also blocks CRLF sequences that would otherwise let a crafted
+        // header name inject additional headers or a second MIME body.
+        if (preg_match('/^[A-Za-z0-9-]+$/', $name) !== 1) {
+            return false;
+        }
+
         $reserved = [
             'bcc',
             'cc',

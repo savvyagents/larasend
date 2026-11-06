@@ -29,7 +29,9 @@ import {
 import DashboardPanel from '@/components/DashboardPanel.vue';
 import EmailProviderPanel from '@/components/EmailProviderPanel.vue';
 import GlobalRail from '@/components/GlobalRail.vue';
+import PaginationControls from '@/components/PaginationControls.vue';
 import { Toaster } from '@/components/ui/sonner';
+import { section as projectSectionRoute } from '@/routes/projects';
 import { transfer as transferWorkspaceOwnershipRoute } from '@/routes/workspace-members/ownership';
 
 type Metric = {
@@ -206,7 +208,7 @@ const props = defineProps<{
     projects: ProjectOption[];
     archivedProjects: ArchivedProjectOption[];
     section: string;
-    filters: { q: string; range: string };
+    filters: { q: string; range: string; status: string };
     metrics: Metric[];
     dashboard: {
         outbound: {
@@ -262,6 +264,15 @@ const props = defineProps<{
     bounceMetrics: BounceMetric[];
     bounceQueue: BounceQueueRow[];
     emails: EmailRow[];
+    emailPagination: {
+        page: number;
+        per_page: number;
+        from: number | null;
+        to: number | null;
+        has_previous: boolean;
+        has_more: boolean;
+    };
+    emailStatusCounts: Record<string, number>;
     selectedEmail: EmailDetail | null;
     sidebarCounts: Record<string, number>;
     inboxUnread?: number;
@@ -431,7 +442,7 @@ const statusFilters = [
     'Complained',
     'Failed',
 ];
-const selectedFilter = ref('All');
+const selectedFilter = ref(statusFilterLabel(props.filters.status));
 const searchQuery = ref(props.filters.q);
 const searchInput = ref<HTMLInputElement | null>(null);
 const selectedRange = ref(props.filters.range || '14d');
@@ -584,12 +595,12 @@ const filteredEmails = computed(() => {
 });
 
 const statusFilterCounts = computed(() => {
-    const counts: Record<string, number> = { All: props.emails.length };
+    const counts: Record<string, number> = {
+        All: props.emailStatusCounts.all ?? 0,
+    };
 
     for (const filter of statusFilters.slice(1)) {
-        counts[filter] = props.emails.filter(
-            (email) => email.status === filter.toLowerCase(),
-        ).length;
+        counts[filter] = props.emailStatusCounts[filter.toLowerCase()] ?? 0;
     }
 
     return counts;
@@ -705,6 +716,12 @@ const complaintRate = computed(
 );
 const projectBasePath = computed(() => `/projects/${props.project.slug}`);
 const sectionPath = computed(() => sectionHref(props.section));
+const emailRefreshHref = computed(() =>
+    projectSectionRoute.url(
+        { project: props.project.slug, section: props.section },
+        { query: emailLogQuery() },
+    ),
+);
 const exportHref = computed(() => {
     const params = new URLSearchParams({
         section: props.section,
@@ -719,7 +736,10 @@ const exportHref = computed(() => {
 });
 
 function sectionHref(section: string): string {
-    return `${projectBasePath.value}/${section}`;
+    return projectSectionRoute.url({
+        project: props.project.slug,
+        section,
+    });
 }
 
 function projectAction(path: string): string {
@@ -770,6 +790,8 @@ usePoll(
     {
         only: [
             'emails',
+            'emailPagination',
+            'emailStatusCounts',
             'selectedEmail',
             'metrics',
             'bounceMetrics',
@@ -815,7 +837,18 @@ watch(
                 ...selected.value,
                 ...refreshed,
             };
+
+            return;
         }
+
+        selected.value = props.selectedEmail;
+    },
+);
+
+watch(
+    () => props.filters.status,
+    (status) => {
+        selectedFilter.value = statusFilterLabel(status);
     },
 );
 
@@ -1533,17 +1566,91 @@ function closeInspector(): void {
     selected.value = null;
 }
 
-function applySearch(): void {
-    router.get(
-        sectionPath.value,
-        { q: searchQuery.value, range: selectedRange.value },
-        { preserveState: true, preserveScroll: true, replace: true },
+type EmailLogQuery = {
+    q?: string | null;
+    range?: string | null;
+    status?: string | null;
+    page?: number | null;
+};
+
+function statusFilterLabel(status: string): string {
+    const match = statusFilters.find(
+        (filter) => filter.toLowerCase() === status.toLowerCase(),
     );
+
+    return match ?? 'All';
+}
+
+function statusFilterValue(filter: string): string | null {
+    return filter === 'All' ? null : filter.toLowerCase();
+}
+
+function emailLogQuery(overrides: EmailLogQuery = {}): Record<string, string> {
+    const merged: EmailLogQuery = {
+        q: searchQuery.value || null,
+        range: selectedRange.value,
+        status: statusFilterValue(selectedFilter.value),
+        page:
+            props.emailPagination.page > 1 ? props.emailPagination.page : null,
+        ...overrides,
+    };
+    const query: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(merged)) {
+        if (value !== null && value !== '') {
+            query[key] = String(value);
+        }
+    }
+
+    return query;
+}
+
+function visitEmailLog(overrides: EmailLogQuery, replace = true): void {
+    if (Object.prototype.hasOwnProperty.call(overrides, 'page')) {
+        selected.value = null;
+    }
+
+    router.get(sectionPath.value, emailLogQuery(overrides), {
+        preserveState: true,
+        preserveScroll: true,
+        replace,
+    });
+}
+
+function applySearch(): void {
+    visitEmailLog({ q: searchQuery.value, page: null });
 }
 
 function setRange(range: string): void {
     selectedRange.value = range;
-    applySearch();
+    visitEmailLog({ range, page: null });
+}
+
+function setStatusFilter(filter: string): void {
+    selectedFilter.value = filter;
+    visitEmailLog({ status: statusFilterValue(filter), page: null });
+}
+
+function clearEmailFilters(): void {
+    selectedFilter.value = 'All';
+    searchQuery.value = '';
+    visitEmailLog({ q: null, status: null, page: null });
+}
+
+function showPreviousEmailPage(): void {
+    visitEmailLog(
+        {
+            page:
+                props.emailPagination.page - 1 > 1
+                    ? props.emailPagination.page - 1
+                    : null,
+        },
+        false,
+    );
+}
+
+function showNextEmailPage(): void {
+    visitEmailLog({ page: props.emailPagination.page + 1 }, false);
 }
 
 function startOfDay(date: Date): Date {
@@ -1826,7 +1933,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                 <div class="ml-auto flex items-center gap-1.5" v-else />
                 <Link
                     v-if="isMailSection"
-                    :href="`${sectionPath}?q=${encodeURIComponent(searchQuery)}&range=${encodeURIComponent(selectedRange)}`"
+                    :href="emailRefreshHref"
                     class="grid size-8 place-items-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-950 dark:text-[#9aa0a6] dark:hover:bg-[#16191c] dark:hover:text-zinc-100"
                     title="Refresh"
                 >
@@ -2304,7 +2411,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                                         'border-zinc-300 bg-zinc-100 text-zinc-950 dark:border-[#262b30] dark:bg-[#1a1e22] dark:text-zinc-100':
                                             selectedFilter === filter,
                                     }"
-                                    @click="selectedFilter = filter"
+                                    @click="setStatusFilter(filter)"
                                 >
                                     {{ filter }}
                                     <span
@@ -2317,11 +2424,7 @@ function recipientTitle(email: EmailRow): string | undefined {
                             </div>
                             <button
                                 class="inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 font-sans text-[11.5px] text-zinc-500 hover:text-zinc-950 dark:border-[#1d2125] dark:bg-[#111315] dark:text-[#9aa0a6] dark:hover:text-zinc-100"
-                                @click="
-                                    selectedFilter = 'All';
-                                    searchQuery = '';
-                                    applySearch();
-                                "
+                                @click="clearEmailFilters"
                             >
                                 <SlidersHorizontal class="size-4" /> Clear
                             </button>
@@ -2414,6 +2517,18 @@ function recipientTitle(email: EmailRow): string | undefined {
                                 </button>
                             </template>
                         </div>
+                        <PaginationControls
+                            :page="emailPagination.page"
+                            :from="emailPagination.from"
+                            :to="emailPagination.to"
+                            :has-previous="emailPagination.has_previous"
+                            :has-more="emailPagination.has_more"
+                            noun="emails"
+                            previous-label="Newer"
+                            next-label="Older"
+                            @previous="showPreviousEmailPage"
+                            @next="showNextEmailPage"
+                        />
                     </section>
 
                     <aside

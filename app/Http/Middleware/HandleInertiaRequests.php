@@ -73,7 +73,8 @@ class HandleInertiaRequests extends Middleware
             return null;
         }
 
-        $workspace = $user->workspaces()->orderBy('workspaces.id')->first();
+        $workspace = $user->workspaces()->where('workspaces.owner_id', $user->id)->orderBy('workspaces.id')->first()
+            ?? $user->workspaces()->orderBy('workspaces.id')->first();
 
         if (! $workspace) {
             return null;

@@ -8,8 +8,6 @@ import {
     AtSign,
     Bell,
     CheckSquare,
-    ChevronLeft,
-    ChevronRight,
     Forward,
     Inbox as InboxIcon,
     Mail,
@@ -35,6 +33,7 @@ import {
     watch,
 } from 'vue';
 import GlobalRail from '@/components/GlobalRail.vue';
+import PaginationControls from '@/components/PaginationControls.vue';
 import RichTextEditor from '@/components/RichTextEditor.vue';
 import { Toaster } from '@/components/ui/sonner';
 import { inbox as inboxRoute } from '@/routes/projects';
@@ -218,6 +217,23 @@ function visitInbox(params: Record<string, string | null>): void {
         preserveState: true,
         preserveScroll: true,
         showProgress: false,
+    });
+}
+
+function showPreviousThreadPage(): void {
+    visitInbox({
+        page:
+            props.pagination.page - 1 > 1
+                ? String(props.pagination.page - 1)
+                : null,
+        thread: null,
+    });
+}
+
+function showNextThreadPage(): void {
+    visitInbox({
+        page: String(props.pagination.page + 1),
+        thread: null,
     });
 }
 
@@ -1420,55 +1436,18 @@ function participantSummary(thread: ThreadRow): string {
                         </div>
                     </button>
                 </div>
-                <div
-                    v-if="pagination.has_previous || pagination.has_more"
-                    class="flex items-center justify-between gap-2 border-t border-zinc-200 bg-white px-3 py-2 dark:border-[#1d2125] dark:bg-[#0b0c0d]"
-                    aria-label="Conversation pagination"
-                >
-                    <p class="min-w-0 truncate text-[11px] text-zinc-500">
-                        <span
-                            class="font-semibold text-zinc-700 dark:text-zinc-300"
-                        >
-                            {{ pagination.from }}–{{ pagination.to }}
-                        </span>
-                        conversations · Page {{ pagination.page }}
-                    </p>
-                    <div class="flex shrink-0 items-center gap-1">
-                        <button
-                            type="button"
-                            class="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-[11px] font-semibold text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-35 dark:border-[#25292d] dark:text-zinc-300 dark:hover:border-[#34393e] dark:hover:bg-[#151719]"
-                            :disabled="!pagination.has_previous"
-                            aria-label="Show newer conversations"
-                            @click="
-                                visitInbox({
-                                    page:
-                                        pagination.page - 1 > 1
-                                            ? String(pagination.page - 1)
-                                            : null,
-                                    thread: null,
-                                })
-                            "
-                        >
-                            <ChevronLeft class="size-3.5" />
-                            Newer
-                        </button>
-                        <button
-                            type="button"
-                            class="inline-flex h-8 items-center gap-1 rounded-md border border-zinc-200 px-2 text-[11px] font-semibold text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-35 dark:border-[#25292d] dark:text-zinc-300 dark:hover:border-[#34393e] dark:hover:bg-[#151719]"
-                            :disabled="!pagination.has_more"
-                            aria-label="Show older conversations"
-                            @click="
-                                visitInbox({
-                                    page: String(pagination.page + 1),
-                                    thread: null,
-                                })
-                            "
-                        >
-                            Older
-                            <ChevronRight class="size-3.5" />
-                        </button>
-                    </div>
-                </div>
+                <PaginationControls
+                    :page="pagination.page"
+                    :from="pagination.from"
+                    :to="pagination.to"
+                    :has-previous="pagination.has_previous"
+                    :has-more="pagination.has_more"
+                    noun="conversations"
+                    previous-label="Newer"
+                    next-label="Older"
+                    @previous="showPreviousThreadPage"
+                    @next="showNextThreadPage"
+                />
             </section>
 
             <section
