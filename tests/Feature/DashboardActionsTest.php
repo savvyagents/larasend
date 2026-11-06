@@ -645,6 +645,28 @@ it('sends dashboard emails through the configured SES source', function () {
     Http::assertNothingSent();
 });
 
+it('rejects dashboard sends with CRLF-injected custom header names', function () {
+    $user = User::factory()->create();
+
+    configureDashboardSesSending($user);
+    Queue::fake();
+
+    $this->actingAs($user)
+        ->post('/send', [
+            'from' => 'Larasend <receipts@example.com>',
+            'to' => 'maya@example.com',
+            'cc' => '',
+            'bcc' => '',
+            'subject' => 'Header smuggling attempt',
+            'text' => 'Hello',
+            'headers' => ["X-A: x\r\nFrom: spoof@attacker.example" => 'value'],
+        ])
+        ->assertSessionHasErrors('headers');
+
+    expect(Email::query()->where('subject', 'Header smuggling attempt')->exists())->toBeFalse();
+    Queue::assertNothingPushed();
+});
+
 it('resends stored emails from the inspector action', function () {
     $user = User::factory()->create();
 

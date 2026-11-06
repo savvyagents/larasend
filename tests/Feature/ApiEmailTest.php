@@ -10,6 +10,7 @@ use App\Models\Suppression;
 use App\Models\User;
 use App\Models\Workspace;
 use App\Services\EmailSendService;
+use App\Services\MimeMessageBuilder;
 use App\Services\Providers\EmailProviderFactory;
 use App\Services\SesV2Client;
 use Illuminate\Cache\RateLimiter as CacheRateLimiter;
@@ -87,6 +88,48 @@ it('sends an email with api key auth and stores searchable content', function ()
 
     Queue::assertPushed(SendQueuedEmail::class, fn (SendQueuedEmail $job) => $job->emailId === $email->id);
 });
+
+it('rejects custom header names that are not rfc 5322 tokens', function (string $headerName) {
+    [, , , $token] = larasendProjectFixture();
+
+    Queue::fake();
+
+    $this->withToken($token)->postJson('/api/emails', [
+        'from' => 'Larasend <receipts@example.com>',
+        'to' => ['maya@example.com'],
+        'subject' => 'Header smuggling attempt',
+        'text' => 'Hello',
+        'headers' => [$headerName => 'value'],
+    ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('headers');
+
+    expect(Email::query()->exists())->toBeFalse();
+    Queue::assertNothingPushed();
+})->with([
+    'crlf injected name' => "X-A: x\r\nFrom: spoof@attacker.example",
+    'bare line feed' => "X-Test\nBcc: spoof@attacker.example",
+    'bare carriage return' => "X-Test\r",
+    'colon in name' => 'X-Test: extra',
+    'space in name' => 'X Test',
+]);
+
+it('refuses to build mime containing CR or LF in custom headers', function (array $headers) {
+    expect(fn () => app(MimeMessageBuilder::class)->build(
+        from: 'receipts@example.com',
+        to: ['maya@example.com'],
+        cc: [],
+        bcc: [],
+        replyTo: null,
+        subject: 'Defense in depth',
+        html: null,
+        text: 'Hello',
+        headers: $headers,
+    ))->toThrow(InvalidArgumentException::class);
+})->with([
+    'crlf in name' => [["X-A: x\r\nFrom: spoof@attacker.example" => 'value']],
+    'crlf in value' => [['X-Test' => "safe\r\nBcc: spoof@attacker.example"]],
+]);
 
 it('stores queued mime on the configured shared disk', function () {
     [, , , $token] = larasendProjectFixture();

@@ -7,10 +7,12 @@ use App\Models\Source;
 use App\Models\WebhookLog;
 use App\Services\SesEventNormalizer;
 use App\Services\SnsSignatureVerifier;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Throwable;
 
 class SesWebhookController extends Controller
 {
@@ -34,6 +36,20 @@ class SesWebhookController extends Controller
             return response()->json(['message' => 'Invalid SNS message signature.'], 422);
         }
 
+        if (! $this->hasFreshTimestamp($payload)) {
+            $log->forceFill(['status' => 'rejected', 'error' => 'Stale or invalid SNS message timestamp.'])->save();
+
+            return response()->json(['message' => 'Stale or invalid SNS message timestamp.'], 422);
+        }
+
+        $topicArn = is_string($payload['TopicArn'] ?? null) ? $payload['TopicArn'] : null;
+
+        if ($source->sns_topic_arn !== null && $topicArn !== $source->sns_topic_arn) {
+            $log->forceFill(['status' => 'rejected', 'error' => 'Unexpected SNS TopicArn.'])->save();
+
+            return response()->json(['message' => 'Unexpected SNS TopicArn.'], 422);
+        }
+
         if ($messageType === 'SubscriptionConfirmation' && isset($payload['SubscribeURL'])) {
             $subscribeUrl = (string) $payload['SubscribeURL'];
 
@@ -44,6 +60,13 @@ class SesWebhookController extends Controller
             }
 
             Http::timeout(10)->get($subscribeUrl)->throw();
+
+            // Pin the topic on the first confirmation so later envelopes signed
+            // by a different (attacker-owned) topic are rejected above.
+            if ($source->sns_topic_arn === null && $topicArn !== null) {
+                $source->forceFill(['sns_topic_arn' => $topicArn])->save();
+            }
+
             $log->forceFill(['status' => 'confirmed'])->save();
 
             return response()->json(['message' => 'SNS subscription confirmed.']);
@@ -62,6 +85,31 @@ class SesWebhookController extends Controller
         $log->forceFill(['status' => 'processed'])->save();
 
         return response()->json(['message' => 'Event processed.']);
+    }
+
+    /**
+     * Reject replayed envelopes: AWS delivers SNS messages promptly, so a
+     * Timestamp older than 15 minutes (or implausibly far in the future)
+     * indicates a captured envelope being replayed.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function hasFreshTimestamp(array $payload): bool
+    {
+        $timestamp = $payload['Timestamp'] ?? null;
+
+        if (! is_string($timestamp)) {
+            return false;
+        }
+
+        try {
+            $sentAt = CarbonImmutable::parse($timestamp);
+        } catch (Throwable) {
+            return false;
+        }
+
+        return $sentAt->greaterThanOrEqualTo(now()->subMinutes(15))
+            && $sentAt->lessThanOrEqualTo(now()->addMinutes(5));
     }
 
     private function isAllowedSnsUrl(string $url, string $region): bool

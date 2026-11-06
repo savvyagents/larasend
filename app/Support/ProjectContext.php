@@ -14,7 +14,11 @@ class ProjectContext
 {
     public function workspaceFor(User $user): Workspace
     {
-        $workspace = $user->workspaces()->orderBy('workspaces.id')->first();
+        // Prefer a workspace the user owns: being added as a member of someone
+        // else's (lower-id) workspace must never silently replace the user's
+        // own context.
+        $workspace = $user->workspaces()->where('workspaces.owner_id', $user->id)->orderBy('workspaces.id')->first()
+            ?? $user->workspaces()->orderBy('workspaces.id')->first();
 
         if ($workspace) {
             return $workspace;

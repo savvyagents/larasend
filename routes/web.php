@@ -42,6 +42,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::put('workspace/members/{user}', [WorkspaceMemberController::class, 'update'])->name('workspace-members.update');
     Route::patch('workspace/members/{user}/ownership', [WorkspaceMemberController::class, 'transferOwnership'])->name('workspace-members.ownership.transfer');
     Route::delete('workspace/members/{user}', [WorkspaceMemberController::class, 'destroy'])->name('workspace-members.destroy');
+    Route::delete('workspace/{workspace}/membership', [WorkspaceMemberController::class, 'leave'])->name('workspace-members.leave');
 
     Route::prefix('projects/{project}')->name('projects.')->group(function () {
         Route::get('/', [ProjectController::class, 'show'])->name('show');
