@@ -525,6 +525,15 @@ watch(
         }
     },
 );
+watch(
+    () => props.newWebhookEndpoint,
+    (newWebhookEndpoint) => {
+        if (newWebhookEndpoint) {
+            revealedWebhookEndpoint.value = newWebhookEndpoint;
+            webhookSecretCopied.value = false;
+        }
+    },
+);
 const projectForm = reactive({
     name: '',
     slug: '',
